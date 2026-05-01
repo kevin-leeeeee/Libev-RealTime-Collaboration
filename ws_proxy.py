@@ -75,10 +75,9 @@ async def root_handler(request):
 
 async def init_app():
     app = web.Application()
-    # 同時處理 GET 和 HEAD 請求，以應付 Render 的健康度檢查
+    # web.get 已經自動包含了 HEAD 請求的處理，用來應付 Render 的健康度檢查
     app.add_routes([
-        web.get('/', root_handler),
-        web.head('/', root_handler)
+        web.get('/', root_handler)
     ])
     return app
 
