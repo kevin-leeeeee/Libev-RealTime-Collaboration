@@ -320,13 +320,14 @@ void remove_client(struct ev_loop *loop, client_t *client) {
     if (client->next) client->next->prev = client->prev;
 
     char sys_msg[128];
-    snprintf(sys_msg, sizeof(sys_msg), "User '%s' left the chat.", client->nickname);
-    printf("%s\n", sys_msg);
-    free(client);
-    broadcast_message(NULL, sys_msg, 1, 0, 0);
+    if (strcmp(client->nickname, "__PROBE__") != 0) {
+        snprintf(sys_msg, sizeof(sys_msg), "User '%s' left the chat.", client->nickname);
+        printf("%s\n", sys_msg);
+        broadcast_message(NULL, sys_msg, 1, 0, 0);
+        broadcast_user_list();
+    }
     
-    // 有人離開，自動推播新名單
-    broadcast_user_list();
+    free(client);
 }
 
 void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
@@ -362,11 +363,14 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
         }
 
         if (strlen(start_ptr) > 0) {
-            if (start_ptr[0] == '/') {
+            if (strncmp(start_ptr, "GET ", 4) == 0 || strncmp(start_ptr, "HEAD ", 5) == 0 || strncmp(start_ptr, "POST ", 5) == 0 || strncmp(start_ptr, "Host: ", 6) == 0) {
+                // 偵測到 HTTP 請求 (Render Health Check)，標記為探測並斷開連線
+                printf("Ignored HTTP probe and disconnected: %s\n", start_ptr);
+                strcpy(client->nickname, "__PROBE__"); // 特殊標記，讓 remove_client 不廣播離開訊息
+                remove_client(loop, client);
+                return;
+            } else if (start_ptr[0] == '/') {
                 handle_command(client, start_ptr);
-            } else if (strncmp(start_ptr, "GET ", 4) == 0 || strncmp(start_ptr, "HEAD ", 5) == 0 || strncmp(start_ptr, "POST ", 5) == 0) {
-                // 忽略 Render Health Check 等 HTTP 請求，只在後端印出，不廣播到聊天室
-                printf("Ignored HTTP request from %s: %s\n", client->nickname, start_ptr);
             } else {
                 broadcast_message(client, start_ptr, 0, 0, 0);
             }
@@ -455,7 +459,7 @@ int main() {
 
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
     server_addr.sin_port = htons(PORT);
 
     if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) { perror("bind error"); exit(EXIT_FAILURE); }
