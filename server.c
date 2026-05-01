@@ -433,6 +433,11 @@ int main() {
     srand(time(NULL));
     init_files();
     struct ev_loop *loop = ev_default_loop(0);
+    if (!loop) {
+        perror("Failed to initialize libev loop");
+        exit(EXIT_FAILURE);
+    }
+    
     int server_fd;
     struct sockaddr_in server_addr;
     struct ev_io accept_watcher;
@@ -452,6 +457,7 @@ int main() {
 
     setnonblock(server_fd);
     printf("Co-edit Server listening on port %d...\n", PORT);
+    fflush(stdout); // 確保印出，不被 buffer 吃掉
 
     ev_io_init(&accept_watcher, accept_cb, server_fd, EV_READ);
     ev_io_start(loop, &accept_watcher);
