@@ -22,7 +22,7 @@ WORKDIR /app
 COPY . .
 
 # 編譯 C 伺服器
-RUN make
+RUN make clean && make
 
 # 給予啟動腳本執行權限
 RUN chmod +x start.sh

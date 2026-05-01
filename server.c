@@ -437,7 +437,7 @@ int main() {
     struct sockaddr_in server_addr;
     struct ev_io accept_watcher;
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) exit(EXIT_FAILURE);
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) { perror("socket error"); exit(EXIT_FAILURE); }
 
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -447,8 +447,8 @@ int main() {
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(PORT);
 
-    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) exit(EXIT_FAILURE);
-    if (listen(server_fd, SOMAXCONN) < 0) exit(EXIT_FAILURE);
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) { perror("bind error"); exit(EXIT_FAILURE); }
+    if (listen(server_fd, SOMAXCONN) < 0) { perror("listen error"); exit(EXIT_FAILURE); }
 
     setnonblock(server_fd);
     printf("Co-edit Server listening on port %d...\n", PORT);

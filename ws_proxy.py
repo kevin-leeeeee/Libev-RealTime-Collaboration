@@ -22,6 +22,10 @@ async def websocket_handler(request):
         print("Failed to connect to C Server. Is it running?")
         await ws.close()
         return ws
+    except Exception as e:
+        print(f"Failed to connect to C Server with error: {e}")
+        await ws.close()
+        return ws
 
     # 任務：從 C 伺服器讀取，轉發給 WebSocket
     async def tcp_to_ws():
