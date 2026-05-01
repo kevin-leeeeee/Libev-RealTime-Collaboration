@@ -218,10 +218,21 @@
             ws.close();
         }
         
-        const serverAddr = serverIpInput.value.trim();
-        const wsUrl = serverAddr.startsWith('ws') ? serverAddr : 'ws://' + serverAddr;
+        let serverAddr = serverIpInput.value.trim();
+        
+        // 自動處理 https -> wss 以及移除多餘的協定前綴
+        if (serverAddr.startsWith('https://')) {
+            serverAddr = 'wss://' + serverAddr.replace('https://', '');
+        } else if (serverAddr.startsWith('http://')) {
+            serverAddr = 'ws://' + serverAddr.replace('http://', '');
+        }
+        
+        const wsUrl = (serverAddr.startsWith('ws://') || serverAddr.startsWith('wss://')) 
+                      ? serverAddr 
+                      : (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + serverAddr;
         
         console.log('Connecting to:', wsUrl);
+        appendMessage('正在連線至 ' + wsUrl + '...', 'sys');
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
