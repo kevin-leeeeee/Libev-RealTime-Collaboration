@@ -119,10 +119,15 @@
                         </div>
                         <h2 class="font-bold text-slate-800">聊天頻道</h2>
                     </div>
-                    <div id="messages" class="p-5 overflow-y-auto flex-grow flex flex-col gap-3">
+                    <div id="messages" class="p-5 overflow-y-auto flex-grow flex flex-col gap-3 relative" style="scroll-behavior: smooth;">
                         <div class="message-anim glass-dark self-center px-4 py-2 rounded-2xl text-xs text-slate-500 font-medium text-center w-full border border-slate-100/50">
                             支援指令：/nick [名字], /roll, /startgame, /guess [數字]
                         </div>
+                    </div>
+                    <!-- 回到底部按鈕 -->
+                    <div id="scrollToBottomBtn" class="hidden absolute bottom-20 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 glass px-4 py-2 rounded-full shadow-lg border border-cyan-200 text-cyan-600 text-xs font-bold cursor-pointer hover:bg-cyan-50 transition-all select-none" style="bottom: 80px; left: 50%; transform: translateX(-50%); position: absolute;">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+                        <span id="unreadCount"></span>有新訊息
                     </div>
                     <div class="p-4 border-t border-slate-100 shrink-0 bg-white/40 rounded-b-3xl flex gap-2">
                         <input type="text" id="msgInput" disabled placeholder="輸入聊天或指令..." class="w-full bg-white/60 border border-slate-200 rounded-2xl px-5 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 transition-all shadow-inner">
@@ -194,6 +199,27 @@
     // 初始化伺服器位址輸入框 (預設為 Render 雲端伺服器)
     serverIpInput.value = 'libev-realtime-collaboration.onrender.com';
 
+    // --- 回到底部按鈕邏輯 ---
+    const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
+    const unreadCountEl = document.getElementById('unreadCount');
+    let unreadMessages = 0;
+
+    messagesDiv.addEventListener('scroll', () => {
+        const isAtBottom = messagesDiv.scrollHeight - messagesDiv.clientHeight <= messagesDiv.scrollTop + 20;
+        if (isAtBottom) {
+            scrollToBottomBtn.classList.add('hidden');
+            unreadMessages = 0;
+            unreadCountEl.textContent = '';
+        }
+    });
+
+    scrollToBottomBtn.addEventListener('click', () => {
+        messagesDiv.scrollTo({ top: messagesDiv.scrollHeight, behavior: 'smooth' });
+        scrollToBottomBtn.classList.add('hidden');
+        unreadMessages = 0;
+        unreadCountEl.textContent = '';
+    });
+
     const emotes = {
         '(smile)': '😊', '(heart)': '❤️', '(laugh)': '😂',
         '(cry)': '😭', '(thumbsup)': '👍', '(fire)': '🔥'
@@ -253,23 +279,26 @@
         ws.onmessage = (event) => {
             let data = event.data;
             
-            if (data.startsWith('[LIST] ')) {
-                updateUserList(data.substring(7));
+            // 修正：startsWith('[FILES]') 而非 '[FILES] '
+            // 因為 Python proxy 的 .strip() 會把尾端空白字元去掉，導致液平採不到
+            if (data.startsWith('[LIST]')) {
+                updateUserList(data.substring(7).trim());
                 return;
             }
             
-            if (data.startsWith('[FILES] ')) {
-                const files = data.substring(8).split(',');
+            if (data.startsWith('[FILES]')) {
+                const payload = data.substring(7).trim(); // 去掉首部空白
+                const files = payload ? payload.split(',') : [];
                 // 更新檔案清單，保留舊的內容（如果有的話）
                 const newContents = {};
                 files.forEach(f => {
                     if (f.trim()) {
-                        newContents[f] = fileContents[f] || '';
+                        newContents[f.trim()] = fileContents[f.trim()] || '';
                     }
                 });
                 fileContents = newContents;
-                if (!currentFile && files.length > 0) {
-                    currentFile = files[0];
+                if (!currentFile && files.length > 0 && files[0].trim()) {
+                    currentFile = files[0].trim();
                     docEditor.value = fileContents[currentFile] || '';
                 }
                 renderFileTabs();
@@ -483,8 +512,8 @@
     }
 
     function appendMessage(text, type) {
-        // 檢查是否已經捲動到底部 (容許 10px 的誤差)
-        const isScrolledToBottom = messagesDiv.scrollHeight - messagesDiv.clientHeight <= messagesDiv.scrollTop + 10;
+        // 檢查是否已經捲動到底部 (容許 20px 的誤差)
+        const isScrolledToBottom = messagesDiv.scrollHeight - messagesDiv.clientHeight <= messagesDiv.scrollTop + 20;
         
         const msgDiv = document.createElement('div');
         
@@ -503,9 +532,14 @@
         msgDiv.textContent = text;
         messagesDiv.appendChild(msgDiv);
         
-        // 只有在原本就處於底部時，才自動往下捲動
         if (isScrolledToBottom) {
+            // 在底部：自動捲動並隱藏按鈕
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        } else {
+            // 不在底部：顯示「有新訊息」按鈕並更新計數
+            unreadMessages++;
+            unreadCountEl.textContent = unreadMessages > 1 ? `${unreadMessages} 則` : '';
+            scrollToBottomBtn.classList.remove('hidden');
         }
     }
 
