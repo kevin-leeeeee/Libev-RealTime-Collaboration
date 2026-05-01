@@ -71,10 +71,14 @@ async def websocket_handler(request):
     return ws
 
 async def root_handler(request):
-    # 如果帶有 WebSocket Upgrade 標頭，就交給 websocket_handler 處理
-    if request.headers.get('Upgrade', '').lower() == 'websocket':
+    # 判斷這是不是一個合法的 WebSocket Upgrade 請求
+    ws = web.WebSocketResponse()
+    if ws.can_prepare(request):
+        print(f"[{request.method}] WebSocket upgrade requested from {request.remote}")
         return await websocket_handler(request)
+    
     # 否則就回傳 200 OK，作為 Render Health Check 的回應
+    print(f"[{request.method}] Normal HTTP request to {request.path} from {request.remote}")
     return web.Response(text="Render Health Check OK")
 
 async def init_app():
