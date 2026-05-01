@@ -1,0 +1,16 @@
+# Binaries
+server
+*.o
+
+# Python
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project specific
+pdf_text.txt
+notes.txt
+data.json
