@@ -226,6 +226,15 @@
         } else if (serverAddr.startsWith('http://')) {
             serverAddr = 'ws://' + serverAddr.replace('http://', '');
         }
+
+        // 確保 Render 網址加上 /ws 路徑
+        if (!serverAddr.endsWith('/ws')) {
+            // 如果結尾有斜線，先去掉
+            if (serverAddr.endsWith('/')) {
+                serverAddr = serverAddr.slice(0, -1);
+            }
+            serverAddr += '/ws';
+        }
         
         const wsUrl = (serverAddr.startsWith('ws://') || serverAddr.startsWith('wss://')) 
                       ? serverAddr 

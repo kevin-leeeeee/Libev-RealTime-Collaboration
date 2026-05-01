@@ -75,22 +75,15 @@ async def websocket_handler(request):
     print("Web client disconnected")
     return ws
 
-async def root_handler(request):
-    # 判斷這是不是一個合法的 WebSocket Upgrade 請求
-    ws = web.WebSocketResponse()
-    if ws.can_prepare(request):
-        print(f"[{request.method}] WebSocket upgrade requested from {request.remote}")
-        return await websocket_handler(request)
-    
-    # 否則就回傳 200 OK，作為 Render Health Check 的回應
+async def health_check_handler(request):
     print(f"[{request.method}] Normal HTTP request to {request.path} from {request.remote}")
     return web.Response(text="Render Health Check OK")
 
 async def init_app():
     app = web.Application()
-    # web.get 已經自動包含了 HEAD 請求的處理，用來應付 Render 的健康度檢查
     app.add_routes([
-        web.get('/', root_handler)
+        web.get('/', health_check_handler),
+        web.get('/ws', websocket_handler)
     ])
     return app
 
