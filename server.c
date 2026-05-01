@@ -429,7 +429,10 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
     broadcast_user_list();
 }
 
+#include <signal.h>
+
 int main() {
+    signal(SIGPIPE, SIG_IGN);
     srand(time(NULL));
     init_files();
     struct ev_loop *loop = ev_default_loop(0);
