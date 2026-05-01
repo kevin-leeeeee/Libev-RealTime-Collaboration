@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Libev 線上共編協作系統 (Bento + Glassmorphism 版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+        }
+        .glass-dark {
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        /* 隱藏的鏡像 DOM 用於計算游標座標 */
+        #mirror {
+            visibility: hidden; position: absolute; top: 24px; left: 24px; right: 24px; bottom: 24px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; 
+            font-size: 1.125rem; /* text-lg */
+            line-height: 1.625; /* leading-relaxed */
+            white-space: pre-wrap; word-wrap: break-word;
+            pointer-events: none; z-index: 1; box-sizing: border-box;
+            color: #1e293b;
+        }
+
+        /* 遠端游標樣式 */
+        .remote-cursor {
+            position: absolute; width: 2px; height: 1.2em;
+            background-color: #ff4757; z-index: 10; pointer-events: none;
+            transition: top 0.1s, left 0.1s;
+        }
+        .remote-cursor-label {
+            position: absolute; top: -1.2em; left: 0;
+            background-color: #ff4757; color: white; font-size: 0.7rem;
+            padding: 2px 6px; border-radius: 4px; border-bottom-left-radius: 0;
+            white-space: nowrap; font-family: sans-serif;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .cursor-fade { animation: fadeOut 2s forwards; animation-delay: 2s; }
+        
+        @keyframes fadeOut { to { opacity: 0; } }
+        
+        /* 聊天訊息動畫 */
+        @keyframes messageSlideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message-anim { animation: messageSlideIn 0.2s ease-out forwards; }
+        
+        /* 自訂滾動條 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-800 lg:overflow-hidden relative selection:bg-cyan-500/30">
+
+    <!-- Floating Background Shapes (Glassmorphism) -->
+    <div class="fixed inset-0 overflow-hidden pointer-events-none z-0">
+        <div class="absolute top-[-10%] left-[-10%] w-[20rem] lg:w-[40rem] h-[20rem] lg:h-[40rem] bg-pink-200 rounded-full mix-blend-multiply filter blur-[60px] lg:blur-[100px] opacity-40 lg:opacity-60 lg:animate-pulse" style="animation-duration: 8s;"></div>
+        <div class="absolute bottom-[-10%] right-[-10%] w-[20rem] lg:w-[40rem] h-[20rem] lg:h-[40rem] bg-indigo-200 rounded-full mix-blend-multiply filter blur-[60px] lg:blur-[100px] opacity-40 lg:opacity-60 lg:animate-pulse" style="animation-duration: 10s; animation-delay: 1s;"></div>
+        <div class="absolute top-[20%] left-[40%] w-[15rem] lg:w-[30rem] h-[15rem] lg:h-[30rem] bg-emerald-200 rounded-full mix-blend-multiply filter blur-[60px] lg:blur-[100px] opacity-30 lg:animate-pulse" style="animation-duration: 12s; animation-delay: 2s;"></div>
+    </div>
+
+    <div class="relative z-10 min-h-screen lg:h-screen max-w-[1600px] mx-auto p-4 md:p-6 flex flex-col gap-4">
+        
+        <!-- Header (Bento Box 1) -->
+        <header class="glass rounded-3xl p-4 md:px-8 flex justify-between items-center shrink-0 shadow-2xl">
+            <div class="flex items-center gap-4">
+                <div class="w-12 h-12 bg-gradient-to-br from-cyan-400 to-indigo-500 rounded-xl flex items-center justify-center shadow-lg shadow-cyan-500/20">
+                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                </div>
+                <div>
+                    <h1 class="text-xl md:text-2xl font-bold text-slate-800">Libev Co-edit</h1>
+                    <p class="text-xs text-slate-400 tracking-wider font-medium">BENTO + LIGHT GLASS UI</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-4">
+                <!-- Google Doc Style User Avatars -->
+                <div id="userAvatars" class="flex -space-x-3 hover:space-x-1 transition-all duration-300"></div>
+                
+                <div id="status" class="px-5 py-2.5 rounded-full text-sm font-semibold glass border-red-200 text-red-500 flex items-center gap-3 shadow-sm">
+                    <span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>
+                    尚未連線
+                </div>
+                <!-- Server Address Setting -->
+                <div class="flex items-center gap-2 glass px-3 py-1.5 rounded-2xl border-white/40">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Server</span>
+                    <input type="text" id="serverIp" placeholder="IP:Port" class="bg-transparent border-none text-xs text-slate-600 focus:outline-none w-28 font-mono">
+                    <button id="connectBtn" class="text-cyan-500 hover:text-cyan-600">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content (Bento Grid) -->
+        <main class="flex-grow grid grid-cols-1 lg:grid-cols-4 gap-4 lg:min-h-0">
+            
+            <!-- Left Column: Chat Area -->
+            <div class="col-span-1 flex flex-col gap-4 lg:min-h-0">
+                
+                <!-- Chat Interface (Bento Box 3) -->
+                <div class="glass rounded-3xl flex flex-col flex-grow min-h-[400px] lg:min-h-0 shadow-xl border border-white/40">
+                    <div class="p-5 border-b border-slate-100 flex items-center gap-3 bg-white/40 rounded-t-3xl">
+                        <div class="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                            <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
+                        </div>
+                        <h2 class="font-bold text-slate-800">聊天頻道</h2>
+                    </div>
+                    <div id="messages" class="p-5 overflow-y-auto flex-grow flex flex-col gap-3">
+                        <div class="message-anim glass-dark self-center px-4 py-2 rounded-2xl text-xs text-slate-500 font-medium text-center w-full border border-slate-100/50">
+                            支援指令：/nick [名字], /roll, /startgame, /guess [數字]
+                        </div>
+                    </div>
+                    <div class="p-4 border-t border-slate-100 shrink-0 bg-white/40 rounded-b-3xl flex gap-2">
+                        <input type="text" id="msgInput" disabled placeholder="輸入聊天或指令..." class="w-full bg-white/60 border border-slate-200 rounded-2xl px-5 py-3 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500/50 transition-all shadow-inner">
+                        <button id="sendBtn" class="bg-cyan-500 hover:bg-cyan-400 text-white px-4 py-2 rounded-2xl shadow-lg transition-colors flex items-center justify-center shrink-0">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Document Editor (Bento Box 4) -->
+            <div class="col-span-1 lg:col-span-3 glass rounded-3xl relative flex flex-col min-h-[500px] lg:min-h-0 shadow-2xl overflow-hidden border border-white/40">
+                <div class="p-5 border-b border-slate-100 flex justify-between items-center bg-white/40 backdrop-blur-md z-20 shrink-0">
+                    <div class="flex items-center gap-3">
+                        <div class="w-8 h-8 rounded-lg bg-pink-500/10 flex items-center justify-center">
+                            <svg class="w-4 h-4 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                        </div>
+                        <h2 class="font-bold text-slate-800 tracking-wide">即時共編文件區</h2>
+                    </div>
+                    <span class="text-xs text-slate-400 tracking-widest uppercase font-mono font-semibold">Shared Environment</span>
+                </div>
+                
+                <div class="flex-grow flex overflow-hidden">
+                    <!-- File Sidebar (Replit Style) -->
+                    <div class="w-40 md:w-48 border-r border-slate-100 bg-white/10 flex flex-col shrink-0">
+                        <div class="p-4 flex justify-between items-center">
+                            <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Files</span>
+                            <button id="addFileBtn" class="w-5 h-5 rounded-md bg-slate-200 text-slate-600 flex items-center justify-center hover:bg-cyan-500 hover:text-white transition-colors">
+                                <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 4v16m8-8H4"></path></svg>
+                            </button>
+                        </div>
+                        <div id="fileTabs" class="flex-grow overflow-y-auto px-2 space-y-1">
+                            <!-- Files generated by JS -->
+                        </div>
+                    </div>
+                    
+                    <!-- Editor Area -->
+                    <div class="flex-grow relative overflow-hidden bg-slate-50/50 shadow-inner" id="editorContainer">
+                        <div id="mirror"></div>
+                        <textarea id="docEditor" disabled placeholder="選擇檔案以開始即時共編..." class="absolute inset-0 w-full h-full p-6 bg-transparent text-slate-800 font-mono text-lg leading-relaxed resize-none outline-none z-10"></textarea>
+                    </div>
+                </div>
+            </div>
+            
+        </main>
+    </div>
+
+<script>
+    const statusDiv = document.getElementById('status');
+    const messagesDiv = document.getElementById('messages');
+    const msgInput = document.getElementById('msgInput');
+    const userAvatars = document.getElementById('userAvatars');
+    const docEditor = document.getElementById('docEditor');
+    const mirrorDiv = document.getElementById('mirror');
+    const editorContainer = document.getElementById('editorContainer');
+    const fileTabs = document.getElementById('fileTabs');
+    const addFileBtn = document.getElementById('addFileBtn');
+    const currentFileNameDisplay = document.querySelector('.tracking-wide');
+    const serverIpInput = document.getElementById('serverIp');
+    const connectBtn = document.getElementById('connectBtn');
+
+    let ws = null;
+    let syncTimeout = null;
+    let remoteCursors = {}; 
+    let currentFile = null; 
+    let fileContents = {};
+    const cursorColors = ['#ff4757', '#2ed573', '#1e90ff', '#ffa502', '#ff6b81', '#7bed9f'];
+
+    // 初始化伺服器位址輸入框
+    let defaultHost = window.location.hostname || 'localhost';
+    serverIpInput.value = defaultHost + ':8081';
+
+    const emotes = {
+        '(smile)': '😊', '(heart)': '❤️', '(laugh)': '😂',
+        '(cry)': '😭', '(thumbsup)': '👍', '(fire)': '🔥'
+    };
+    
+    connectBtn.onclick = () => {
+        appendMessage('正在連線至 ' + serverIpInput.value + '...', 'sys');
+        connect();
+    };
+
+    function parseEmotes(text) {
+        let parsed = text;
+        for (const [key, value] of Object.entries(emotes)) {
+            parsed = parsed.split(key).join(value);
+        }
+        return parsed;
+    }
+
+    function connect() {
+        if (ws) {
+            ws.close();
+        }
+        
+        const serverAddr = serverIpInput.value.trim();
+        const wsUrl = serverAddr.startsWith('ws') ? serverAddr : 'ws://' + serverAddr;
+        
+        console.log('Connecting to:', wsUrl);
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            statusDiv.innerHTML = '<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span> 已連線';
+            statusDiv.className = 'px-5 py-2.5 rounded-full text-sm font-semibold glass border-emerald-100 text-emerald-600 flex items-center gap-3 shadow-sm';
+            msgInput.disabled = false;
+            docEditor.disabled = false;
+        };
+
+        ws.onmessage = (event) => {
+            let data = event.data;
+            
+            if (data.startsWith('[LIST] ')) {
+                updateUserList(data.substring(7));
+                return;
+            }
+            
+            if (data.startsWith('[FILES] ')) {
+                const files = data.substring(8).split(',');
+                // 更新檔案清單，保留舊的內容（如果有的話）
+                const newContents = {};
+                files.forEach(f => {
+                    if (f.trim()) {
+                        newContents[f] = fileContents[f] || '';
+                    }
+                });
+                fileContents = newContents;
+                if (!currentFile && files.length > 0) {
+                    currentFile = files[0];
+                    docEditor.value = fileContents[currentFile] || '';
+                }
+                renderFileTabs();
+                return;
+            }
+
+            if (data.startsWith('[DOC_SYNC] ')) {
+                const payload = data.substring(11);
+                // 格式: 暱稱|檔名|游標位置|Base64內容
+                const parts = payload.split('|');
+                if (parts.length >= 4) {
+                    const nickname = parts[0];
+                    const filename = parts[1];
+                    const cursorPos = parseInt(parts[2]);
+                    const base64Data = parts[3];
+                    
+                    // 儲存收到的檔案內容
+                    try {
+                        const decodedText = decodeURIComponent(atob(base64Data));
+                        fileContents[filename] = decodedText;
+                        
+                        // 如果正是目前編輯的檔案，則更新畫面
+                        if (filename === currentFile) {
+                            handleDocSync(nickname, cursorPos, decodedText);
+                        }
+                    } catch(e) {}
+                }
+                return;
+            }
+
+            data = data.replace(/\x1b\[[0-9;]*m/g, '');
+            let type = 'received';
+            
+            if (data.startsWith('[SYS]')) {
+                type = 'sys';
+                data = data.substring(5).trim();
+            } else if (data.startsWith('[GAME]')) {
+                type = 'game';
+                data = data.substring(6).trim();
+            }
+
+            data = parseEmotes(data);
+            appendMessage(data, type);
+        };
+
+        ws.onclose = () => {
+            statusDiv.innerHTML = '<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span> 已斷線';
+            statusDiv.className = 'px-5 py-2.5 rounded-full text-sm font-semibold glass border-red-100 text-red-500 flex items-center gap-3 shadow-sm';
+            msgInput.disabled = true;
+            docEditor.disabled = true;
+            userAvatars.innerHTML = '';
+            setTimeout(connect, 3000);
+        };
+    }
+
+    // --- 遠端游標與共編邏輯 ---
+    function getHashColor(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        return cursorColors[Math.abs(hash) % cursorColors.length];
+    }
+
+    function getCoordinatesFromPos(text, pos) {
+        const textBefore = text.substring(0, pos);
+        const formattedText = textBefore.replace(/\n/g, '<br>');
+        
+        mirrorDiv.innerHTML = formattedText + '<span id="cursor-marker">|</span>';
+        
+        const marker = document.getElementById('cursor-marker');
+        if (!marker) return { x: 24, y: 24 }; // updated padding
+        
+        return {
+            x: marker.offsetLeft + 24,
+            y: marker.offsetTop + 24
+        };
+    }
+
+    function renderRemoteCursor(nickname, text, pos) {
+        let cursorObj = remoteCursors[nickname];
+        
+        if (!cursorObj) {
+            const cursorEl = document.createElement('div');
+            cursorEl.className = 'remote-cursor cursor-fade';
+            const color = getHashColor(nickname);
+            cursorEl.style.backgroundColor = color;
+            
+            const labelEl = document.createElement('div');
+            labelEl.className = 'remote-cursor-label';
+            labelEl.textContent = nickname;
+            labelEl.style.backgroundColor = color;
+            cursorEl.appendChild(labelEl);
+            
+            editorContainer.appendChild(cursorEl);
+            cursorObj = { el: cursorEl };
+            remoteCursors[nickname] = cursorObj;
+        }
+        
+        const coords = getCoordinatesFromPos(text, pos);
+        cursorObj.el.style.left = `${coords.x}px`;
+        cursorObj.el.style.top = `${coords.y - docEditor.scrollTop}px`;
+        
+        cursorObj.el.classList.remove('cursor-fade');
+        void cursorObj.el.offsetWidth; 
+        cursorObj.el.classList.add('cursor-fade');
+    }
+
+    function syncDocument() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const text = docEditor.value;
+        const pos = docEditor.selectionStart;
+        const base64Data = btoa(encodeURIComponent(text));
+        // 更新本地快取
+        fileContents[currentFile] = text;
+        // 傳送格式: /doc_sync 檔名|位置|內容
+        ws.send(`/doc_sync ${currentFile}|${pos}|${base64Data}`);
+    }
+
+    docEditor.addEventListener('input', () => {
+        clearTimeout(syncTimeout);
+        syncTimeout = setTimeout(syncDocument, 150);
+    });
+
+    docEditor.addEventListener('keyup', (e) => {
+        if (e.key.startsWith('Arrow')) {
+            clearTimeout(syncTimeout);
+            syncTimeout = setTimeout(syncDocument, 150);
+        }
+    });
+    docEditor.addEventListener('mouseup', () => {
+        clearTimeout(syncTimeout);
+        syncTimeout = setTimeout(syncDocument, 150);
+    });
+    
+    docEditor.addEventListener('scroll', () => {
+        // Handle scroll if needed
+    });
+
+    function handleDocSync(nickname, cursorPos, decodedText) {
+        renderRemoteCursor(nickname, decodedText, cursorPos);
+        
+        if (docEditor.value === decodedText) return;
+        
+        const cursorStart = docEditor.selectionStart;
+        const cursorEnd = docEditor.selectionEnd;
+        const oldLength = docEditor.value.length;
+        
+        docEditor.value = decodedText;
+        
+        const newLength = decodedText.length;
+        const diff = newLength - oldLength;
+        
+        docEditor.setSelectionRange(
+            Math.max(0, cursorStart + diff),
+            Math.max(0, cursorEnd + diff)
+        );
+    }
+
+    // --- 檔案管理邏輯 ---
+    function renderFileTabs() {
+        fileTabs.innerHTML = '';
+        Object.keys(fileContents).forEach(filename => {
+            const btn = document.createElement('button');
+            const isActive = filename === currentFile;
+            btn.className = `w-full text-left px-3 py-2 rounded-xl text-xs font-medium transition-all flex items-center gap-2 group ${
+                isActive ? 'bg-cyan-500 text-white shadow-md' : 'text-slate-600 hover:bg-white/60'
+            }`;
+            
+            const icon = filename.endsWith('.c') ? '📄' : filename.endsWith('.h') ? '📋' : '📝';
+            btn.innerHTML = `<span>${icon}</span> <span class="truncate">${filename}</span>`;
+            
+            btn.onclick = () => {
+                if (currentFile === filename) return;
+                currentFile = filename;
+                docEditor.value = fileContents[filename];
+                renderFileTabs();
+                // 觸發一次同步讓遠端知道我切換了（可選）
+                syncDocument();
+            };
+            fileTabs.appendChild(btn);
+        });
+    }
+
+    addFileBtn.onclick = () => {
+        const name = prompt('請輸入新檔名 (例如: hello.c):');
+        if (name && name.trim()) {
+            ws.send(`/create_file ${name.trim()}`);
+        }
+    };
+
+    renderFileTabs();
+
+    // --- 聊天邏輯 ---
+    function updateUserList(usersStr) {
+        userAvatars.innerHTML = '';
+        const users = usersStr.split(',').map(u => u.trim()).filter(u => u.length > 0);
+        users.forEach(user => {
+            const color = getHashColor(user);
+            const initial = user.charAt(0).toUpperCase();
+            const avatar = document.createElement('div');
+            avatar.className = 'w-8 h-8 md:w-10 md:h-10 rounded-full border-2 border-neutral-900 flex items-center justify-center text-white text-xs font-bold shadow-lg cursor-pointer transition-all hover:scale-110 hover:z-30 relative group';
+            avatar.style.backgroundColor = color;
+            avatar.innerHTML = `${initial}<span class="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 px-2 py-1 bg-black/80 text-[10px] rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">${user}</span>`;
+            userAvatars.appendChild(avatar);
+        });
+    }
+
+    function appendMessage(text, type) {
+        const msgDiv = document.createElement('div');
+        
+        let styles = '';
+        if (type === 'received') {
+            styles = 'bg-white/80 text-slate-800 self-start rounded-tr-2xl rounded-br-2xl rounded-bl-2xl shadow-sm border border-slate-100';
+        } else if (type === 'sent') {
+            styles = 'bg-cyan-500 text-white self-end rounded-tl-2xl rounded-tr-2xl rounded-bl-2xl shadow-md';
+        } else if (type === 'sys') {
+            styles = 'bg-amber-50/80 text-amber-600 self-center rounded-2xl text-xs border border-amber-100 font-medium';
+        } else if (type === 'game') {
+            styles = 'bg-emerald-50/80 text-emerald-600 self-center rounded-2xl font-bold border border-emerald-100 shadow-sm';
+        }
+        
+        msgDiv.className = `message-anim px-4 py-2.5 text-sm max-w-[85%] break-words ${styles}`;
+        msgDiv.textContent = text;
+        messagesDiv.appendChild(msgDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function sendMessage() {
+        const text = msgInput.value.trim();
+        if (text && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(text);
+            if (!text.startsWith('/')) {
+                appendMessage(parseEmotes(text), 'sent');
+            }
+            msgInput.value = '';
+        }
+    }
+
+    msgInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.keyCode === 13) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+    
+    document.getElementById('sendBtn').addEventListener('click', sendMessage);
+
+    connect();
+</script>
+</body>
+</html>
