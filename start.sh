@@ -9,4 +9,4 @@ sleep 1
 
 # 3. 啟動 Python WebSocket 代理 (前景執行，保持容器運作)
 echo "Starting Python WebSocket Proxy..."
-python3 ws_proxy.py
+python3 -u ws_proxy.py

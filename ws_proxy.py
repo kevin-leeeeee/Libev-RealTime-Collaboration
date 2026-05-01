@@ -1,4 +1,5 @@
 import asyncio
+import os
 from aiohttp import web
 
 # C 伺服器的設定
@@ -6,7 +7,7 @@ TCP_HOST = '127.0.0.1'
 TCP_PORT = 8080
 
 # WebSocket 伺服器設定
-WS_PORT = 8081
+WS_PORT = int(os.environ.get('PORT', 8081))
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
