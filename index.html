@@ -479,6 +479,9 @@
     }
 
     function appendMessage(text, type) {
+        // 檢查是否已經捲動到底部 (容許 10px 的誤差)
+        const isScrolledToBottom = messagesDiv.scrollHeight - messagesDiv.clientHeight <= messagesDiv.scrollTop + 10;
+        
         const msgDiv = document.createElement('div');
         
         let styles = '';
@@ -495,7 +498,11 @@
         msgDiv.className = `message-anim px-4 py-2.5 text-sm max-w-[85%] break-words ${styles}`;
         msgDiv.textContent = text;
         messagesDiv.appendChild(msgDiv);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        
+        // 只有在原本就處於底部時，才自動往下捲動
+        if (isScrolledToBottom) {
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
     }
 
     function sendMessage() {

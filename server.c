@@ -364,6 +364,9 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
         if (strlen(start_ptr) > 0) {
             if (start_ptr[0] == '/') {
                 handle_command(client, start_ptr);
+            } else if (strncmp(start_ptr, "GET ", 4) == 0 || strncmp(start_ptr, "HEAD ", 5) == 0 || strncmp(start_ptr, "POST ", 5) == 0) {
+                // 忽略 Render Health Check 等 HTTP 請求，只在後端印出，不廣播到聊天室
+                printf("Ignored HTTP request from %s: %s\n", client->nickname, start_ptr);
             } else {
                 broadcast_message(client, start_ptr, 0, 0, 0);
             }
