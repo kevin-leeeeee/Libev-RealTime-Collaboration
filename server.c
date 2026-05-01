@@ -26,6 +26,7 @@ typedef struct client_node {
     char nickname[NICKNAME_LEN];
     char read_buffer[MAX_BUFFER];
     int buffer_len;
+    int has_joined;
     struct client_node *prev;
     struct client_node *next;
 } client_t;
@@ -190,6 +191,18 @@ void broadcast_message(client_t *sender, const char *msg, int is_system, int is_
 
 void handle_command(client_t *client, char *cmd) {
     char sys_msg[MAX_BUFFER];
+    
+    if (strncmp(cmd, "/__PROXY_CONNECT__", 18) == 0) {
+        if (!client->has_joined) {
+            client->has_joined = 1;
+            char sys_msg[128];
+            snprintf(sys_msg, sizeof(sys_msg), "User '%s' joined the chat.", client->nickname);
+            printf("%s\n", sys_msg);
+            broadcast_message(client, sys_msg, 1, 0, 0);
+            broadcast_user_list();
+        }
+        return;
+    }
     
     // 多檔案共編指令格式: /doc_sync 檔名|位置|資料
     if (strncmp(cmd, "/doc_sync ", 10) == 0) {
@@ -404,6 +417,7 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
 
     new_client->fd = client_fd;
     new_client->buffer_len = 0;
+    new_client->has_joined = 0;
     memset(new_client->read_buffer, 0, MAX_BUFFER);
     snprintf(new_client->nickname, NICKNAME_LEN, "Guest_%d", client_fd);
 
@@ -426,14 +440,6 @@ void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
             send(new_client->fd, sync_msg, strlen(sync_msg), MSG_DONTWAIT);
         }
     }
-
-    char sys_msg[128];
-    snprintf(sys_msg, sizeof(sys_msg), "User '%s' joined the chat.", new_client->nickname);
-    printf("%s\n", sys_msg);
-    broadcast_message(new_client, sys_msg, 1, 0, 0);
-
-    // 新加入者，自動向所有人推播最新名單
-    broadcast_user_list();
 }
 
 #include <signal.h>

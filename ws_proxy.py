@@ -19,6 +19,8 @@ async def websocket_handler(request):
         # 連接到後端 C 伺服器
         log_msg(f"Attempting to connect to C server at {TCP_HOST}:{TCP_PORT}...")
         reader, writer = await asyncio.open_connection(TCP_HOST, TCP_PORT)
+        writer.write(b"/__PROXY_CONNECT__\n")
+        await writer.drain()
         log_msg("Successfully connected to C server.")
     except Exception as e:
         log_msg(f"CRITICAL: Failed to connect to C Server with error: {e}")

@@ -306,6 +306,10 @@
             if (data.startsWith('[SYS]')) {
                 type = 'sys';
                 data = data.substring(5).trim();
+                // 過濾「加入/離開」系統訊息，避免重連時的刷頻
+                if (data.includes('joined the chat') || data.includes('left the chat')) {
+                    return; // 靜默丟棄，頭像清單由 [LIST] 訊息負責更新
+                }
             } else if (data.startsWith('[GAME]')) {
                 type = 'game';
                 data = data.substring(6).trim();
@@ -316,12 +320,12 @@
         };
 
         ws.onclose = () => {
-            statusDiv.innerHTML = '<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span> 已斷線';
+            statusDiv.innerHTML = '<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span> 已斷線，請手動重新連線';
             statusDiv.className = 'px-5 py-2.5 rounded-full text-sm font-semibold glass border-red-100 text-red-500 flex items-center gap-3 shadow-sm';
             msgInput.disabled = true;
             docEditor.disabled = true;
             userAvatars.innerHTML = '';
-            setTimeout(connect, 3000);
+            // 不自動重連，避免「User joined/left」刷頻
         };
     }
 
