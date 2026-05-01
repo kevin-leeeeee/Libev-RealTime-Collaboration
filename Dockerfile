@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 安裝 Python WebSocket 依賴
-RUN pip3 install websockets asyncio
+RUN pip3 install aiohttp asyncio
 
 # 設定工作目錄
 WORKDIR /app

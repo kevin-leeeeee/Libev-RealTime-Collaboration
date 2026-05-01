@@ -1,24 +1,26 @@
 import asyncio
-import websockets
+from aiohttp import web
 
 # C 伺服器的設定
 TCP_HOST = '127.0.0.1'
 TCP_PORT = 8080
 
 # WebSocket 伺服器設定
-WS_HOST = '0.0.0.0'
 WS_PORT = 8081
 
-async def handle_client(websocket):
-    print(f"New Web client connected from {websocket.remote_address}")
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    
+    print(f"New Web client connected")
     
     try:
         # 連接到後端 C 伺服器
         reader, writer = await asyncio.open_connection(TCP_HOST, TCP_PORT)
     except ConnectionRefusedError:
         print("Failed to connect to C Server. Is it running?")
-        await websocket.close(reason="Backend offline")
-        return
+        await ws.close()
+        return ws
 
     # 任務：從 C 伺服器讀取，轉發給 WebSocket
     async def tcp_to_ws():
@@ -27,32 +29,29 @@ async def handle_client(websocket):
                 data = await reader.readuntil(separator=b'\n')
                 if not data:
                     break
-                # 將資料解碼後送往網頁
-                msg = data.decode('utf-8').strip()
-                await websocket.send(msg)
-        except asyncio.IncompleteReadError:
-            pass
+                await ws.send_str(data.decode('utf-8').strip())
         except Exception as e:
             print(f"tcp_to_ws error: {e}")
 
     # 任務：從 WebSocket 讀取，轉發給 C 伺服器
     async def ws_to_tcp():
         try:
-            async for message in websocket:
-                # 確保訊息以換行結尾（因為 C 伺服器是以 \n 拆包）
-                if not message.endswith('\n'):
-                    message += '\n'
-                writer.write(message.encode('utf-8'))
-                await writer.drain()
-        except websockets.exceptions.ConnectionClosed:
-            pass
+            async for msg in ws:
+                if msg.type == web.WSMsgType.TEXT:
+                    text = msg.data
+                    if not text.endswith('\n'):
+                        text += '\n'
+                    writer.write(text.encode('utf-8'))
+                    await writer.drain()
+                elif msg.type == web.WSMsgType.ERROR:
+                    print(f"WebSocket connection closed with exception {ws.exception()}")
         except Exception as e:
             print(f"ws_to_tcp error: {e}")
 
     task1 = asyncio.create_task(tcp_to_ws())
     task2 = asyncio.create_task(ws_to_tcp())
 
-    # 等待任一任務結束 (通常代表斷線)
+    # 等待任一任務結束
     done, pending = await asyncio.wait(
         [task1, task2],
         return_when=asyncio.FIRST_COMPLETED
@@ -63,13 +62,26 @@ async def handle_client(websocket):
 
     writer.close()
     await writer.wait_closed()
-    print(f"Web client {websocket.remote_address} disconnected")
+    print("Web client disconnected")
+    return ws
 
-async def main():
-    print(f"Starting WebSocket Proxy on ws://{WS_HOST}:{WS_PORT}")
+async def root_handler(request):
+    # 如果帶有 WebSocket Upgrade 標頭，就交給 websocket_handler 處理
+    if request.headers.get('Upgrade', '').lower() == 'websocket':
+        return await websocket_handler(request)
+    # 否則就回傳 200 OK，作為 Render Health Check 的回應
+    return web.Response(text="Render Health Check OK")
+
+async def init_app():
+    app = web.Application()
+    # 同時處理 GET 和 HEAD 請求，以應付 Render 的健康度檢查
+    app.add_routes([
+        web.get('/', root_handler),
+        web.head('/', root_handler)
+    ])
+    return app
+
+if __name__ == '__main__':
+    print(f"Starting WebSocket Proxy on 0.0.0.0:{WS_PORT}")
     print(f"Proxying traffic to TCP Server at {TCP_HOST}:{TCP_PORT}")
-    async with websockets.serve(handle_client, WS_HOST, WS_PORT):
-        await asyncio.Future()  # 永遠執行
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(init_app(), host='0.0.0.0', port=WS_PORT)
