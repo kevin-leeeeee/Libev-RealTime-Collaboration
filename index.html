@@ -191,9 +191,8 @@
     let fileContents = {};
     const cursorColors = ['#ff4757', '#2ed573', '#1e90ff', '#ffa502', '#ff6b81', '#7bed9f'];
 
-    // 初始化伺服器位址輸入框
-    let defaultHost = window.location.hostname || 'localhost';
-    serverIpInput.value = defaultHost + ':8081';
+    // 初始化伺服器位址輸入框 (預設為 Render 雲端伺服器)
+    serverIpInput.value = 'libev-realtime-collaboration.onrender.com';
 
     const emotes = {
         '(smile)': '😊', '(heart)': '❤️', '(laugh)': '😂',
