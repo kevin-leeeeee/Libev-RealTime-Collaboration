@@ -18,3 +18,4 @@ uitest_repo/
 
 venv/
 *.log
+files_index.txt
