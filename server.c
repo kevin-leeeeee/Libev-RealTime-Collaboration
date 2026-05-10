@@ -465,6 +465,20 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
             printf("%s\n", sys_msg);
             broadcast_message(client, sys_msg, 1, 0, 0);
             broadcast_user_list();
+        } else {
+            // 已存在的客戶端重新 JOIN (例如重新整理網頁)
+            client->has_joined = 1;
+            broadcast_user_list();
+            
+            // 補發文件列表給他
+            broadcast_file_list();
+            for (int i = 0; i < file_count; i++) {
+                if (strlen(doc_files[i].content) > 0) {
+                    char sync_msg[MAX_BUFFER + 128];
+                    snprintf(sync_msg, sizeof(sync_msg), "[DOC_SYNC] Server|%s|0|%s\n", doc_files[i].name, doc_files[i].content);
+                    send_eth_frame(client->mac, MSG_DATA, sync_msg, strlen(sync_msg));
+                }
+            }
         }
         free(buffer);
         return;

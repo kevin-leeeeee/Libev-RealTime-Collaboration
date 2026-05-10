@@ -3,7 +3,12 @@ import os
 import socket
 import struct
 import random
+import time
 from aiohttp import web
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 
 # Network Configuration
 INTERFACE = os.environ.get('IFACE', 'lo')
@@ -117,18 +122,25 @@ async def websocket_handler(request):
         except Exception as e:
             log_msg(f"ws_to_raw error: {e}")
             
-        # Send LEAVE message
-        try:
-            if server_mac:
-                leave_frame = pack_eth_frame(server_mac, virtual_mac, MSG_LEAVE, b"")
-                await loop.sock_sendall(raw_socket, leave_frame)
-        except:
-            pass
+    local_ip = get_local_ip()
+    share_url = f"http://{local_ip}:{WS_PORT}"
+    await ws.send_str(f"[INFO] URL: {share_url}")
 
     await ws_to_raw()
     
+    # --- Disconnect Cleanup ---
     if virtual_mac in connected_clients:
         del connected_clients[virtual_mac]
+    
+    try:
+        if server_mac:
+            leave_frame = pack_eth_frame(server_mac, virtual_mac, MSG_LEAVE, b"")
+            # 使用同步發送，確保在 WebSocket handler 結束前封包已送出
+            raw_socket.send(leave_frame)
+            log_msg(f"Sent MSG_LEAVE for {virtual_mac.hex(':')}")
+    except Exception as e:
+        log_msg(f"Error sending LEAVE frame: {e}")
+
     log_msg(f"Web client {virtual_mac.hex(':')} disconnected")
     return ws
 
@@ -141,12 +153,56 @@ def log_msg(msg):
     if len(logs) > 100:
         logs.pop(0)
 
+def get_local_ip():
+    # 優先權 1：檢查是否有環境變數指定 IP (最可靠)
+    env_ip = os.environ.get('SHARE_IP')
+    if env_ip:
+        return env_ip
+
+    # 優先權 2：透過 PowerShell 精準抓取 Windows 本機的 Wi-Fi IP (完美避開亂碼問題)
+    try:
+        import subprocess
+        # 由於 sudo 會重置 PATH 變數，導致找不到 powershell.exe，所以必須使用絕對路徑
+        powershell_path = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+        cmd = [powershell_path, "-Command", "Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias Wi-Fi* | Select-Object -ExpandProperty IPAddress"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = proc.communicate(timeout=2)
+        
+        ip_str = out.decode('utf-8', errors='ignore').strip()
+        
+        # 處理可能有多個回傳值或換行的情況，抓取第一個有效的 IPv4 格式
+        for line in ip_str.splitlines():
+            line = line.strip()
+            if line and line.count('.') == 3:
+                return line
+    except Exception as e:
+        pass
+
+    # 備用方案：標準 socket 偵測 (會抓到 WSL 內部 IP)
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
+async def index_handler(request):
+    try:
+        # 尋找同一目錄下的 client.html
+        return web.FileResponse('./client.html')
+    except:
+        return web.Response(text="client.html not found", status=404)
+
 async def logs_handler(request):
     return web.Response(text="\n".join(logs))
 
 async def init_app():
     app = web.Application()
     app.add_routes([
+        web.get('/', index_handler),
         web.get('/ws', websocket_handler),
         web.get('/logs', logs_handler)
     ])
@@ -166,8 +222,23 @@ if __name__ == '__main__':
         print(f"Failed to create raw socket: {e}")
         exit(1)
 
-    print(f"Starting Local WebSocket Proxy on 0.0.0.0:{WS_PORT}")
-    print(f"Using Raw Sockets (Ethernet Layer 2) on interface: {INTERFACE}")
-    print(f"Waiting for Web Browser to connect at ws://localhost:{WS_PORT}/ws")
+    local_ip = get_local_ip()
+    share_url = f"http://{local_ip}:{WS_PORT}"
     
+    print("\n" + "🚀" + "="*40)
+    print(f" 🚀 Proxy is UP and RUNNING!")
+    print(f" 🔗 Local URL:   http://localhost:{WS_PORT}")
+    print(f" 🌍 Network URL: {share_url}")
+    print("="*41 + "\n")
+    
+    if qrcode:
+        qr = qrcode.QRCode(version=1, border=1)
+        qr.add_data(share_url)
+        qr.make(fit=True)
+        # Use ascii for terminal
+        qr.print_ascii(invert=True)
+        print(f"\nScan this QR code to join from your phone!\n")
+    else:
+        print("Tip: Install 'qrcode' to see a QR code here.")
+
     web.run_app(init_app(), host='0.0.0.0', port=WS_PORT)

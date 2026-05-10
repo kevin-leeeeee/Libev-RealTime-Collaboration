@@ -55,6 +55,9 @@ make
    - 畫面上方若顯示「已連線」，即代表成功。
 
 ## 內建功能
+- **檔案持久化與管理**: 支援建立多個共編文件，伺服器會自動儲存至硬碟並維護索引 (`files_index.txt`)，確保伺服器重啟資料不遺失，並提供圖形化的檔案刪除功能。
+- **手機掃碼秒連 (Mobile Sharing)**: Proxy 啟動時能穿透 WSL，精準自動偵測 Windows 本機的 Wi-Fi IP，並在終端機直接印出 QR Code。
+- **網頁自動託管**: 現在不需手動開啟本地端的 `client.html`，只要在瀏覽器輸入 `http://localhost:8081` 或手機掃碼即可自動載入系統介面。
 - **多人即時編輯**: 一端修改，多端秒級同步（Base64 增量同步）。
 - **遠端游標跟隨**: 仿 Google Docs 效果，即時顯示其他在線使用者的游標位置。
 - **即時聊天系統**: 支援 `/nick` 修改暱稱、表情符號解析。
@@ -66,25 +69,23 @@ make
 
 ## 遠端連線與分享 (Remote Sharing)
 
-若要讓外網或區域網內的同學加入共編，請參考以下步驟：
+由於系統內建了強大的**網路偵測與 QR Code 分享功能**，現在分享給同學變得非常簡單：
 
-### 1. 使用 Tailscale (推薦)
-這是最安全且穩定的方式，適合小組協作：
+### 1. 同一 Wi-Fi 下快速分享 (最推薦)
+1. 確保你的電腦與手機（或其他設備）連上**同一個 Wi-Fi 網路**。
+2. 啟動 `ws_proxy.py`，終端機會自動印出目前的 **Network URL** 與 **QR Code**。
+3. 直接用手機掃描該 QR Code，即可瞬間進入共編畫面！
+4. 進入網頁後，也可以點擊網頁右上角的**「分享」**按鈕，產生可複製的網址與網頁版 QR Code 傳給遠端同學。
+
+*(WSL2 使用者注意：由於 WSL 的網路隔離特性，您必須先在 Windows 以管理員權限執行 Port Forwarding 指令，外部設備才能成功連入。若偵測失敗，可在啟動前加上環境變數 `SHARE_IP=你的IP` 強制指定)*
+
+### 2. 使用 Tailscale (跨網域連線)
+這是最安全且穩定的方式，適合不同網路環境的小組協作：
 - **主機端**: 確保已安裝 Tailscale 並取得你的 Tailscale IP (例如 `100.x.y.z`)。
-- **客戶端 (他人)**: 
-  1. 加入同一個 Tailscale 網路。
-  2. 開啟 `client.html`。
-  3. 修改 `client.html` 內的連線位址，將 `localhost` 改為你的 **Tailscale IP**。
-
-### 2. 使用 Ngrok (快速測試)
-適合臨時產出一個公開連結供人測試：
-1. 啟動 `ws_proxy.py` (預設 8081)。
-2. 執行：`ngrok http 8081`。
-3. 將產生的 `https://xxxx.ngrok-free.app` 傳給對方。
-4. 對方將該網址填入 `client.html` 的 WebSocket 連線處即可。
+- **啟動方式**: 透過 `sudo SHARE_IP=100.x.y.z ./venv/bin/python3 ws_proxy.py` 啟動，這樣 QR Code 就會使用 Tailscale IP 生成。
+- **客戶端 (他人)**: 加入同一個 Tailscale 網路後，直接掃碼或輸入該網址即可連線。
 
 ## 配置說明
-若需更改埠號，請修改以下檔案：
-- `server.c` 中的 `#define PORT`
-- `ws_proxy.py` 中的 `TCP_PORT` 與 `WS_PORT`
-- `client.html` 中的 WebSocket 連線位址
+若需更改埠號或底層通訊協定，請修改以下檔案：
+- `server.c` 中的 `#define CUSTOM_ETH_TYPE` (預設為 `0x88B5`)
+- `ws_proxy.py` 中的 `WS_PORT` (預設為 `8081`)

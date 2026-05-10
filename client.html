@@ -6,6 +6,7 @@
     <title>Libev 線上共編協作系統 (Bento + Glassmorphism 版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <style>
         * { font-family: 'Inter', sans-serif; }
         
@@ -90,6 +91,12 @@
                 <!-- Google Doc Style User Avatars -->
                 <div id="userAvatars" class="flex -space-x-3 hover:space-x-1 transition-all duration-300"></div>
                 
+                <!-- Share Button -->
+                <button id="shareBtn" class="p-2.5 rounded-xl glass hover:bg-cyan-500 hover:text-white transition-all shadow-sm flex items-center gap-2 group">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"></path></svg>
+                    <span class="text-xs font-bold hidden md:inline">分享</span>
+                </button>
+                
                 <div id="status" class="px-5 py-2.5 rounded-full text-sm font-semibold glass border-red-200 text-red-500 flex items-center gap-3 shadow-sm">
                     <span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>
                     尚未連線
@@ -162,6 +169,28 @@
         </main>
     </div>
 
+    <!-- Share Modal -->
+    <div id="shareModal" class="fixed inset-0 z-[100] hidden flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+        <div class="glass max-w-sm w-full rounded-3xl p-8 shadow-2xl border border-white/50">
+            <div class="flex justify-between items-center mb-6">
+                <h3 class="text-lg font-bold text-slate-800">分享連線</h3>
+                <button id="closeShareBtn" class="text-slate-400 hover:text-slate-600 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            
+            <div class="flex flex-col items-center gap-6">
+                <div id="qrcode" class="p-4 bg-white rounded-2xl shadow-inner border border-slate-100"></div>
+                <p class="text-xs text-slate-400 text-center px-4">掃描上方 QR Code 或點擊下方網址複製，即可讓手機或其他裝置加入共編。</p>
+                
+                <div class="w-full flex gap-2">
+                    <input type="text" id="shareUrlInput" readonly class="flex-grow bg-slate-100/50 border border-slate-200 rounded-xl px-4 py-2 text-xs text-slate-600 font-mono outline-none">
+                    <button id="copyUrlBtn" class="bg-cyan-500 hover:bg-cyan-400 text-white px-4 py-2 rounded-xl text-xs font-bold transition-colors shrink-0">複製</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
 <script>
     const statusDiv = document.getElementById('status');
     const messagesDiv = document.getElementById('messages');
@@ -173,6 +202,14 @@
     const fileTabs = document.getElementById('fileTabs');
     const addFileBtn = document.getElementById('addFileBtn');
     const currentFileNameDisplay = document.querySelector('.tracking-wide');
+    
+    const shareBtn = document.getElementById('shareBtn');
+    const shareModal = document.getElementById('shareModal');
+    const closeShareBtn = document.getElementById('closeShareBtn');
+    const shareUrlInput = document.getElementById('shareUrlInput');
+    const copyUrlBtn = document.getElementById('copyUrlBtn');
+    const qrcodeContainer = document.getElementById('qrcode');
+    let qrcodeObj = null;
 
     let ws = null;
     let syncTimeout = null;
@@ -273,6 +310,11 @@
             } else if (data.startsWith('[GAME]')) {
                 type = 'game';
                 data = data.substring(6).trim();
+            }
+
+            if (data.startsWith('[INFO] URL: ')) {
+                window.shareableUrl = data.substring(12);
+                return;
             }
 
             data = parseEmotes(data);
@@ -497,6 +539,42 @@
     });
     
     document.getElementById('sendBtn').addEventListener('click', sendMessage);
+
+    // --- 分享邏輯 ---
+    shareBtn.onclick = () => {
+        // 優先使用伺服器提供的網路網址，若無則回退到目前的位址
+        const url = window.shareableUrl || window.location.href;
+        shareUrlInput.value = url;
+        shareModal.classList.remove('hidden');
+        
+        if (!qrcodeObj) {
+            qrcodeObj = new QRCode(qrcodeContainer, {
+                text: url,
+                width: 160,
+                height: 160,
+                colorDark : "#0f172a",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+        } else {
+            qrcodeObj.clear();
+            qrcodeObj.makeCode(url);
+        }
+    };
+
+    closeShareBtn.onclick = () => shareModal.classList.add('hidden');
+    shareModal.onclick = (e) => { if(e.target === shareModal) shareModal.classList.add('hidden'); };
+
+    copyUrlBtn.onclick = () => {
+        shareUrlInput.select();
+        document.execCommand('copy');
+        copyUrlBtn.textContent = '已複製!';
+        copyUrlBtn.classList.replace('bg-cyan-500', 'bg-emerald-500');
+        setTimeout(() => {
+            copyUrlBtn.textContent = '複製';
+            copyUrlBtn.classList.replace('bg-emerald-500', 'bg-cyan-500');
+        }, 2000);
+    };
 
     connect();
 </script>
