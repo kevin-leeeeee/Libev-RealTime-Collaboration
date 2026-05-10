@@ -4,14 +4,23 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
 #include <ev.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <linux/if_packet.h>
+#include <net/ethernet.h>
 
-#define PORT 8080
-#define MAX_BUFFER 65536 // 加大 buffer 以支援共編長文章
+#define MAX_BUFFER 65536 // 注意：真實網卡 MTU 通常為 1500，超過需實作分片 (Fragmentation)。在 loopback (lo) 介面上測試可支援大封包。
 #define NICKNAME_LEN 32
+#define CUSTOM_ETH_TYPE 0x88B5
+
+// Custom Protocol Message Types
+#define MSG_JOIN 0
+#define MSG_DATA 1
+#define MSG_LEAVE 2
 
 // ANSI Colors for Terminal
 #define COLOR_RESET "\033[0m"
@@ -20,12 +29,13 @@
 #define COLOR_USER  "\033[1;36m"
 #define COLOR_GAME  "\033[1;32m"
 
+int raw_socket_fd;
+int ifindex;
+unsigned char server_mac[6];
+
 typedef struct client_node {
-    struct ev_io io;
-    int fd;
+    unsigned char mac[6];
     char nickname[NICKNAME_LEN];
-    char read_buffer[MAX_BUFFER];
-    int buffer_len;
     int has_joined;
     struct client_node *prev;
     struct client_node *next;
@@ -64,23 +74,6 @@ int base64_decode(const char *input, char *output) {
     return j;
 }
 
-int base64_encode(const char *input, char *output) {
-    int i, j;
-    int len = strlen(input);
-    for (i = 0, j = 0; i < len; i += 3) {
-        int v = input[i] << 16;
-        if (i + 1 < len) v |= input[i + 1] << 8;
-        if (i + 2 < len) v |= input[i + 2];
-
-        output[j++] = base64_table[(v >> 18) & 0x3F];
-        output[j++] = base64_table[(v >> 12) & 0x3F];
-        output[j++] = (i + 1 < len) ? base64_table[(v >> 6) & 0x3F] : '=';
-        output[j++] = (i + 2 < len) ? base64_table[v & 0x3F] : '=';
-    }
-    output[j] = '\0';
-    return j;
-}
-
 // 儲存多個文件的狀態
 typedef struct {
     char name[64];
@@ -92,15 +85,49 @@ file_state_t doc_files[MAX_FILES];
 int file_count = 0;
 
 void broadcast_file_list();
+void broadcast_user_list();
+void broadcast_message(client_t *sender, const char *msg, int is_system, int is_game, int is_raw);
+void send_to_client(client_t *client, const char *msg, int is_system, int is_game);
+
+// 透過 Raw Socket 發送自訂 Ethernet Frame
+void send_eth_frame(const unsigned char *dest_mac, uint8_t msg_type, const char *payload, int payload_len) {
+    if (payload_len > MAX_BUFFER) payload_len = MAX_BUFFER; // 避免溢位
+    
+    int frame_len = 17 + payload_len;
+    char *buffer = malloc(frame_len);
+    if (!buffer) return;
+    
+    struct ethhdr *eh = (struct ethhdr *)buffer;
+    memcpy(eh->h_dest, dest_mac, 6);
+    memcpy(eh->h_source, server_mac, 6);
+    eh->h_proto = htons(CUSTOM_ETH_TYPE);
+    
+    buffer[14] = msg_type;
+    uint16_t len_net = htons((uint16_t)payload_len);
+    memcpy(buffer + 15, &len_net, 2);
+    
+    if (payload_len > 0) {
+        memcpy(buffer + 17, payload, payload_len);
+    }
+    
+    struct sockaddr_ll socket_address;
+    memset(&socket_address, 0, sizeof(socket_address));
+    socket_address.sll_ifindex = ifindex;
+    socket_address.sll_halen = ETH_ALEN;
+    memcpy(socket_address.sll_addr, dest_mac, 6);
+    
+    int bytes_sent = sendto(raw_socket_fd, buffer, frame_len, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
+    if (bytes_sent < 0) {
+        perror("sendto failed (possibly MTU limit exceeded on physical interface)");
+    }
+    free(buffer);
+}
 
 void save_file_to_disk(int index, const char *base64_content) {
     if (index < 0 || index >= file_count) return;
-    
-    // 更新記憶體中的 Base64 內容
     strncpy(doc_files[index].content, base64_content, MAX_BUFFER - 1);
     doc_files[index].content[MAX_BUFFER - 1] = '\0';
 
-    // 解碼後寫入磁碟
     char *decoded = malloc(MAX_BUFFER);
     if (!decoded) return;
     base64_decode(base64_content, decoded);
@@ -115,21 +142,7 @@ void save_file_to_disk(int index, const char *base64_content) {
 }
 
 void init_files() {
-    // 初始化檔案列表（目前暫無內容）
-}
-void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents);
-void broadcast_message(client_t *sender, const char *msg, int is_system, int is_game, int is_raw);
-void send_to_client(client_t *client, const char *msg, int is_system, int is_game);
-void remove_client(struct ev_loop *loop, client_t *client);
-void handle_command(client_t *client, char *cmd);
-void setnonblock(int fd);
-void broadcast_user_list(); // 新增名單廣播功能
-
-void setnonblock(int fd) {
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0) return;
-    flags |= O_NONBLOCK;
-    fcntl(fd, F_SETFL, flags);
+    // 初始化
 }
 
 void send_to_client(client_t *client, const char *msg, int is_system, int is_game) {
@@ -141,10 +154,9 @@ void send_to_client(client_t *client, const char *msg, int is_system, int is_gam
     } else {
         snprintf(out_buf, sizeof(out_buf), "%s\n", msg);
     }
-    send(client->fd, out_buf, strlen(out_buf), MSG_DONTWAIT);
+    send_eth_frame(client->mac, MSG_DATA, out_buf, strlen(out_buf));
 }
 
-// 廣播最新在線名單給所有人
 void broadcast_user_list() {
     char list_buf[MAX_BUFFER];
     strcpy(list_buf, "[LIST] ");
@@ -154,8 +166,8 @@ void broadcast_user_list() {
         if (curr->next) strcat(list_buf, ", ");
         curr = curr->next;
     }
-    // 直接當作 raw message 廣播給所有人
-    broadcast_message(NULL, list_buf, 0, 0, 1);
+    unsigned char broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    send_eth_frame(broadcast_mac, MSG_DATA, list_buf, strlen(list_buf));
 }
 
 void broadcast_file_list() {
@@ -164,7 +176,8 @@ void broadcast_file_list() {
         strcat(list_msg, doc_files[i].name);
         if (i < file_count - 1) strcat(list_msg, ",");
     }
-    broadcast_message(NULL, list_msg, 0, 0, 1);
+    unsigned char broadcast_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    send_eth_frame(broadcast_mac, MSG_DATA, list_msg, strlen(list_msg));
 }
 
 void broadcast_message(client_t *sender, const char *msg, int is_system, int is_game, int is_raw) {
@@ -178,37 +191,37 @@ void broadcast_message(client_t *sender, const char *msg, int is_system, int is_
     } else if (is_game) {
         snprintf(out_buf, sizeof(out_buf), "%s[GAME] %s%s\n", COLOR_GAME, msg, COLOR_RESET);
     } else {
-        snprintf(out_buf, sizeof(out_buf), "%s[%s]%s: %s\n", COLOR_USER, sender->nickname, COLOR_RESET, msg);
+        snprintf(out_buf, sizeof(out_buf), "%s[%s]%s: %s\n", COLOR_USER, sender ? sender->nickname : "Server", COLOR_RESET, msg);
     }
 
     while (curr) {
         if (curr != sender) {
-            send(curr->fd, out_buf, strlen(out_buf), MSG_DONTWAIT);
+            send_eth_frame(curr->mac, MSG_DATA, out_buf, strlen(out_buf));
         }
         curr = curr->next;
     }
 }
 
+void remove_client(client_t *client) {
+    if (client->prev) client->prev->next = client->next;
+    else head = client->next;
+    
+    if (client->next) client->next->prev = client->prev;
+
+    char sys_msg[128];
+    snprintf(sys_msg, sizeof(sys_msg), "User '%s' left the chat.", client->nickname);
+    printf("%s\n", sys_msg);
+    broadcast_message(NULL, sys_msg, 1, 0, 0);
+    broadcast_user_list();
+    
+    free(client);
+}
+
 void handle_command(client_t *client, char *cmd) {
     char sys_msg[MAX_BUFFER];
     
-    if (strncmp(cmd, "/__PROXY_CONNECT__", 18) == 0) {
-        if (!client->has_joined) {
-            client->has_joined = 1;
-            char sys_msg[128];
-            snprintf(sys_msg, sizeof(sys_msg), "User '%s' joined the chat.", client->nickname);
-            printf("%s\n", sys_msg);
-            broadcast_message(client, sys_msg, 1, 0, 0);
-            broadcast_user_list();
-        }
-        return;
-    }
-    
-    // 多檔案共編指令格式: /doc_sync 檔名|位置|資料
     if (strncmp(cmd, "/doc_sync ", 10) == 0) {
         char *payload = cmd + 10;
-        
-        // 解析檔名並更新伺服器記憶體狀態
         char filename[64];
         char *first_pipe = strchr(payload, '|');
         if (first_pipe) {
@@ -221,15 +234,12 @@ void handle_command(client_t *client, char *cmd) {
                 if (strcmp(doc_files[i].name, filename) == 0) {
                     char *second_pipe = strchr(first_pipe + 1, '|');
                     if (second_pipe) {
-                        if (client != NULL) {
-                            save_file_to_disk(i, second_pipe + 1);
-                        }
+                        save_file_to_disk(i, second_pipe + 1);
                     }
                     break;
                 }
             }
         }
-
         char sync_msg[MAX_BUFFER];
         snprintf(sync_msg, sizeof(sync_msg), "[DOC_SYNC] %s|%s", client->nickname, payload);
         broadcast_message(client, sync_msg, 0, 0, 1);
@@ -240,14 +250,12 @@ void handle_command(client_t *client, char *cmd) {
         char *filename = cmd + 13;
         if (file_count >= MAX_FILES) return;
         
-        // 檢查重複
         for(int i=0; i<file_count; i++) if(strcmp(doc_files[i].name, filename) == 0) return;
         
         strncpy(doc_files[file_count].name, filename, 63);
         doc_files[file_count].content[0] = '\0';
         file_count++;
         
-        // 建立實體檔案
         FILE *fp = fopen(filename, "w");
         if(fp) fclose(fp);
         
@@ -264,10 +272,9 @@ void handle_command(client_t *client, char *cmd) {
             snprintf(client->nickname, NICKNAME_LEN, "%.31s", new_nick);
             snprintf(sys_msg, sizeof(sys_msg), "User '%s' is now known as '%s'", old_nick, client->nickname);
             broadcast_message(NULL, sys_msg, 1, 0, 0);
-            broadcast_user_list(); // 名稱改變後推播新名單
+            broadcast_user_list(); 
         }
     } else if (strcmp(cmd, "/list") == 0) {
-        // 向發送者顯示列表 (向下相容)
         strcpy(sys_msg, "Online users: ");
         client_t *curr = head;
         while (curr) {
@@ -323,129 +330,159 @@ void handle_command(client_t *client, char *cmd) {
     }
 }
 
-void remove_client(struct ev_loop *loop, client_t *client) {
-    ev_io_stop(loop, &client->io);
-    close(client->fd);
-
-    if (client->prev) client->prev->next = client->next;
-    else head = client->next;
-    
-    if (client->next) client->next->prev = client->prev;
-
-    char sys_msg[128];
-    if (strcmp(client->nickname, "__PROBE__") != 0) {
-        snprintf(sys_msg, sizeof(sys_msg), "User '%s' left the chat.", client->nickname);
-        printf("%s\n", sys_msg);
-        broadcast_message(NULL, sys_msg, 1, 0, 0);
-        broadcast_user_list();
-    }
-    
-    free(client);
-}
-
 void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
-    client_t *client = (client_t *)watcher;
+    char *buffer = malloc(MAX_BUFFER + 64);
+    if (!buffer) return;
     
-    int remaining_space = MAX_BUFFER - client->buffer_len - 1;
-    if (remaining_space <= 0) {
-        client->buffer_len = 0;
-        remaining_space = MAX_BUFFER - 1;
+    struct sockaddr_ll src_addr;
+    socklen_t addr_len = sizeof(src_addr);
+    
+    int n_read = recvfrom(raw_socket_fd, buffer, MAX_BUFFER + 64, 0, (struct sockaddr*)&src_addr, &addr_len);
+    if (n_read < 17) { free(buffer); return; } // 太短
+    
+    struct ethhdr *eh = (struct ethhdr *)buffer;
+    if (ntohs(eh->h_proto) != CUSTOM_ETH_TYPE) { free(buffer); return; } // 不是我們的協議
+    
+    // 忽略自己發送的封包
+    if (memcmp(eh->h_source, server_mac, 6) == 0) { free(buffer); return; }
+
+    unsigned char *src_mac = eh->h_source;
+    uint8_t msg_type = buffer[14];
+    uint16_t payload_len;
+    memcpy(&payload_len, buffer + 15, 2);
+    payload_len = ntohs(payload_len);
+    
+    if (n_read < 17 + payload_len) { free(buffer); return; } // 不完整的封包
+    
+    // 透過 MAC 尋找客戶端
+    client_t *client = head;
+    while (client) {
+        if (memcmp(client->mac, src_mac, 6) == 0) break;
+        client = client->next;
     }
-
-    int n_read = recv(client->fd, client->read_buffer + client->buffer_len, remaining_space, 0);
-
-    if (n_read < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-        remove_client(loop, client);
-        return;
-    } else if (n_read == 0) {
-        remove_client(loop, client);
-        return;
-    }
-
-    client->buffer_len += n_read;
-    client->read_buffer[client->buffer_len] = '\0';
-
-    char *newline;
-    char *start_ptr = client->read_buffer;
-
-    while ((newline = strchr(start_ptr, '\n')) != NULL) {
-        *newline = '\0';
-        if (newline > start_ptr && *(newline - 1) == '\r') {
-            *(newline - 1) = '\0';
+    
+    if (msg_type == MSG_JOIN) {
+        if (!client) {
+            client = (client_t *)malloc(sizeof(client_t));
+            memcpy(client->mac, src_mac, 6);
+            client->has_joined = 1;
+            snprintf(client->nickname, NICKNAME_LEN, "Guest_%02X%02X", src_mac[4], src_mac[5]);
+            
+            client->prev = NULL;
+            client->next = head;
+            if (head) head->prev = client;
+            head = client;
+            
+            send_to_client(client, "Welcome! Type /nick <name> to change your name.", 1, 0);
+            
+            broadcast_file_list();
+            for (int i = 0; i < file_count; i++) {
+                if (strlen(doc_files[i].content) > 0) {
+                    char sync_msg[MAX_BUFFER + 128];
+                    snprintf(sync_msg, sizeof(sync_msg), "[DOC_SYNC] Server|%s|0|%s\n", doc_files[i].name, doc_files[i].content);
+                    send_eth_frame(client->mac, MSG_DATA, sync_msg, strlen(sync_msg));
+                }
+            }
+            
+            char sys_msg[128];
+            snprintf(sys_msg, sizeof(sys_msg), "User '%s' joined the chat.", client->nickname);
+            printf("%s\n", sys_msg);
+            broadcast_message(client, sys_msg, 1, 0, 0);
+            broadcast_user_list();
         }
-
+        free(buffer);
+        return;
+    }
+    
+    if (!client) { free(buffer); return; } // 忽略未 JOIN 就發送資料的裝置
+    
+    if (msg_type == MSG_LEAVE) {
+        remove_client(client);
+        free(buffer);
+        return;
+    }
+    
+    if (msg_type == MSG_DATA) {
+        char *payload = malloc(payload_len + 1);
+        memcpy(payload, buffer + 17, payload_len);
+        payload[payload_len] = '\0';
+        
+        char *newline;
+        char *start_ptr = payload;
+        
+        while ((newline = strchr(start_ptr, '\n')) != NULL) {
+            *newline = '\0';
+            if (newline > start_ptr && *(newline - 1) == '\r') {
+                *(newline - 1) = '\0';
+            }
+            
+            if (strlen(start_ptr) > 0) {
+                if (start_ptr[0] == '/') {
+                    handle_command(client, start_ptr);
+                } else {
+                    broadcast_message(client, start_ptr, 0, 0, 0);
+                }
+            }
+            start_ptr = newline + 1;
+        }
         if (strlen(start_ptr) > 0) {
-            if (strncmp(start_ptr, "GET ", 4) == 0 || strncmp(start_ptr, "HEAD ", 5) == 0 || strncmp(start_ptr, "POST ", 5) == 0 || strncmp(start_ptr, "Host: ", 6) == 0) {
-                // 偵測到 HTTP 請求 (Render Health Check)，標記為探測並斷開連線
-                printf("Ignored HTTP probe and disconnected: %s\n", start_ptr);
-                strcpy(client->nickname, "__PROBE__"); // 特殊標記，讓 remove_client 不廣播離開訊息
-                remove_client(loop, client);
-                return;
-            } else if (start_ptr[0] == '/') {
+            if (start_ptr[0] == '/') {
                 handle_command(client, start_ptr);
             } else {
                 broadcast_message(client, start_ptr, 0, 0, 0);
             }
         }
-        start_ptr = newline + 1;
+        free(payload);
     }
-
-    int remaining = client->read_buffer + client->buffer_len - start_ptr;
-    if (remaining > 0 && start_ptr != client->read_buffer) {
-        memmove(client->read_buffer, start_ptr, remaining);
-        client->buffer_len = remaining;
-    } else if (remaining == 0) {
-        client->buffer_len = 0;
-    }
+    free(buffer);
 }
 
-void accept_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
-    struct sockaddr_in client_addr;
-    socklen_t client_len = sizeof(client_addr);
-    
-    int client_fd = accept(watcher->fd, (struct sockaddr *)&client_addr, &client_len);
-    if (client_fd < 0) return;
-
-    setnonblock(client_fd);
-
-    client_t *new_client = (client_t *)malloc(sizeof(client_t));
-    if (!new_client) {
-        close(client_fd);
-        return;
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <interface_name> (e.g. eth0 or lo)\n", argv[0]);
+        exit(EXIT_FAILURE);
     }
-
-    new_client->fd = client_fd;
-    new_client->buffer_len = 0;
-    new_client->has_joined = 0;
-    memset(new_client->read_buffer, 0, MAX_BUFFER);
-    snprintf(new_client->nickname, NICKNAME_LEN, "Guest_%d", client_fd);
-
-    new_client->prev = NULL;
-    new_client->next = head;
-    if (head) head->prev = new_client;
-    head = new_client;
-
-    ev_io_init(&new_client->io, read_cb, client_fd, EV_READ);
-    ev_io_start(loop, &new_client->io);
-
-    send_to_client(new_client, "Welcome! Type /nick <name> to change your name.", 1, 0);
+    const char *if_name = argv[1];
     
-    // 新連線時，同步檔案列表與各檔案內容
-    broadcast_file_list();
-    for (int i = 0; i < file_count; i++) {
-        if (strlen(doc_files[i].content) > 0) {
-            char sync_msg[MAX_BUFFER + 128];
-            snprintf(sync_msg, sizeof(sync_msg), "[DOC_SYNC] Server|%s|0|%s\n", doc_files[i].name, doc_files[i].content);
-            send(new_client->fd, sync_msg, strlen(sync_msg), MSG_DONTWAIT);
-        }
+    // 建立 Raw Socket (Layer 2)
+    raw_socket_fd = socket(AF_PACKET, SOCK_RAW, htons(CUSTOM_ETH_TYPE));
+    if (raw_socket_fd < 0) {
+        perror("Socket creation failed (Did you run with sudo?)");
+        exit(EXIT_FAILURE);
     }
-}
-
-#include <signal.h>
-
-int main() {
-    signal(SIGPIPE, SIG_IGN);
+    
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, if_name, IFNAMSIZ - 1);
+    
+    if (ioctl(raw_socket_fd, SIOCGIFINDEX, &ifr) < 0) {
+        perror("Failed to get interface index");
+        exit(EXIT_FAILURE);
+    }
+    ifindex = ifr.ifr_ifindex;
+    
+    if (ioctl(raw_socket_fd, SIOCGIFHWADDR, &ifr) < 0) {
+        perror("Failed to get MAC address");
+        exit(EXIT_FAILURE);
+    }
+    memcpy(server_mac, ifr.ifr_hwaddr.sa_data, 6);
+    printf("Server MAC: %02X:%02X:%02X:%02X:%02X:%02X on interface %s\n",
+           server_mac[0], server_mac[1], server_mac[2],
+           server_mac[3], server_mac[4], server_mac[5], if_name);
+           
+    struct sockaddr_ll sll;
+    memset(&sll, 0, sizeof(sll));
+    sll.sll_family = AF_PACKET;
+    sll.sll_protocol = htons(CUSTOM_ETH_TYPE);
+    sll.sll_ifindex = ifindex;
+    if (bind(raw_socket_fd, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
+        perror("Bind failed");
+        exit(EXIT_FAILURE);
+    }
+    
+    int flags = fcntl(raw_socket_fd, F_GETFL);
+    fcntl(raw_socket_fd, F_SETFL, flags | O_NONBLOCK);
+    
     srand(time(NULL));
     init_files();
     struct ev_loop *loop = ev_default_loop(0);
@@ -454,31 +491,12 @@ int main() {
         exit(EXIT_FAILURE);
     }
     
-    int server_fd;
-    struct sockaddr_in server_addr;
-    struct ev_io accept_watcher;
-
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) { perror("socket error"); exit(EXIT_FAILURE); }
-
-    int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    server_addr.sin_port = htons(PORT);
-
-    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) { perror("bind error"); exit(EXIT_FAILURE); }
-    if (listen(server_fd, SOMAXCONN) < 0) { perror("listen error"); exit(EXIT_FAILURE); }
-
-    setnonblock(server_fd);
-    printf("Co-edit Server listening on port %d...\n", PORT);
-    fflush(stdout); // 確保印出，不被 buffer 吃掉
-
-    ev_io_init(&accept_watcher, accept_cb, server_fd, EV_READ);
-    ev_io_start(loop, &accept_watcher);
-
+    struct ev_io read_watcher;
+    ev_io_init(&read_watcher, read_cb, raw_socket_fd, EV_READ);
+    ev_io_start(loop, &read_watcher);
+    
+    printf("Co-edit Server listening for Custom Protocol 0x%04X on Raw Socket...\n", CUSTOM_ETH_TYPE);
+    
     ev_loop(loop, 0);
-
     return 0;
 }

@@ -94,10 +94,10 @@
                     <span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>
                     尚未連線
                 </div>
-                <!-- Server Address Setting -->
+                <!-- Local Proxy Status -->
                 <div class="flex items-center gap-2 glass px-3 py-1.5 rounded-2xl border-white/40">
-                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Server</span>
-                    <input type="text" id="serverIp" placeholder="IP:Port" class="bg-transparent border-none text-xs text-slate-600 focus:outline-none w-28 font-mono">
+                    <span class="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Proxy</span>
+                    <span class="text-xs text-slate-600 font-mono w-28">ws://localhost:8081</span>
                     <button id="connectBtn" class="text-cyan-500 hover:text-cyan-600">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                     </button>
@@ -196,8 +196,8 @@
     let fileContents = {};
     const cursorColors = ['#ff4757', '#2ed573', '#1e90ff', '#ffa502', '#ff6b81', '#7bed9f'];
 
-    // 初始化伺服器位址輸入框 (預設為 Render 雲端伺服器)
-    serverIpInput.value = 'libev-realtime-collaboration.onrender.com';
+    // 本地代理位址固定為 8081 (或透過環境變數啟動的 proxy port)
+    const wsUrl = 'ws://127.0.0.1:8081/ws';
 
     // --- 回到底部按鈕邏輯 ---
     const scrollToBottomBtn = document.getElementById('scrollToBottomBtn');
@@ -226,7 +226,7 @@
     };
     
     connectBtn.onclick = () => {
-        appendMessage('正在連線至 ' + serverIpInput.value + '...', 'sys');
+        appendMessage('正在連線至本地代理...', 'sys');
         connect();
     };
 
@@ -243,30 +243,8 @@
             ws.close();
         }
         
-        let serverAddr = serverIpInput.value.trim();
-        
-        // 自動處理 https -> wss 以及移除多餘的協定前綴
-        if (serverAddr.startsWith('https://')) {
-            serverAddr = 'wss://' + serverAddr.replace('https://', '');
-        } else if (serverAddr.startsWith('http://')) {
-            serverAddr = 'ws://' + serverAddr.replace('http://', '');
-        }
-
-        // 確保 Render 網址加上 /ws 路徑
-        if (!serverAddr.endsWith('/ws')) {
-            // 如果結尾有斜線，先去掉
-            if (serverAddr.endsWith('/')) {
-                serverAddr = serverAddr.slice(0, -1);
-            }
-            serverAddr += '/ws';
-        }
-        
-        const wsUrl = (serverAddr.startsWith('ws://') || serverAddr.startsWith('wss://')) 
-                      ? serverAddr 
-                      : (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + serverAddr;
-        
         console.log('Connecting to:', wsUrl);
-        appendMessage('正在連線至 ' + wsUrl + '...', 'sys');
+        appendMessage('正在連線至本地代理 ' + wsUrl + ' (它會透過 Raw Socket 尋找伺服器)...', 'sys');
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
