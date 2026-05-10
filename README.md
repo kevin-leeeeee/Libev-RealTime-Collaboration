@@ -77,7 +77,21 @@ make
 3. 直接用手機掃描該 QR Code，即可瞬間進入共編畫面！
 4. 進入網頁後，也可以點擊網頁右上角的**「分享」**按鈕，產生可複製的網址與網頁版 QR Code 傳給遠端同學。
 
-*(WSL2 使用者注意：由於 WSL 的網路隔離特性，您必須先在 Windows 以管理員權限執行 Port Forwarding 指令，外部設備才能成功連入。若偵測失敗，可在啟動前加上環境變數 `SHARE_IP=你的IP` 強制指定)*
+*(WSL2 使用者注意：由於 WSL 的網路隔離特性，您必須先在 Windows 以管理員權限執行 Port Forwarding 指令，外部設備才能成功連入。詳細步驟如下：)*
+
+#### WSL2 外部連線設定步驟：
+若您在 WSL2 環境下運行，請在 **Windows 本機** 以 **系統管理員權限** 開啟 PowerShell 並執行以下指令：
+
+1. **取得 WSL 內部 IP**：在 WSL 終端機輸入 `hostname -I`。
+2. **建立轉接規則**：
+   ```powershell
+   # 將 <WSL_IP> 替換為剛才取得的 IP (例如 172.x.x.x)
+   netsh interface portproxy add v4tov4 listenport=8081 listenaddress=0.0.0.0 connectport=8081 connectaddress=<WSL_IP>
+   ```
+3. **允許防火牆通過**：
+   ```powershell
+   New-NetFirewallRule -DisplayName "WSL-Port-8081" -Direction Inbound -LocalPort 8081 -Protocol TCP -Action Allow
+   ```
 
 ### 2. 使用 Tailscale (跨網域連線)
 這是最安全且穩定的方式，適合不同網路環境的小組協作：
