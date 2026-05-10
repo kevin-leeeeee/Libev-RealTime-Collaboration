@@ -199,7 +199,7 @@
         if (!host || host === '') {
             host = 'localhost';
         }
-        ws = new WebSocket('ws://' + host + ':8081');
+        ws = new WebSocket('ws://' + host + ':8081/ws');
 
         ws.onopen = () => {
             statusDiv.innerHTML = '<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span><span class="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span></span> 已連線';

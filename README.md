@@ -15,41 +15,44 @@
 
 ## 快速開始
 
-### 1. 自動部署 (推薦)
-在專案根目錄下執行：
+### 1. 建立虛擬環境與安裝依賴 (推薦)
+為了避免系統套件衝突 (例如 `externally-managed-environment` 錯誤)，強烈建議使用虛擬環境：
 ```bash
-chmod +x setup.sh
-./setup.sh
+# 安裝系統層級依賴
+sudo apt update && sudo apt install build-essential libev-dev python3 python3-pip python3-venv -y
+
+# 建立並啟動虛擬環境
+python3 -m venv venv
+source venv/bin/activate
+
+# 在虛擬環境內安裝 Python 依賴
+pip install aiohttp websockets
 ```
 
-### 2. 手動安裝步驟
-若不使用腳本，請依序執行：
+### 2. 編譯伺服器
 ```bash
-# 安裝依賴
-sudo apt update && sudo apt install build-essential libev-dev python3 python3-pip -y
-pip3 install websockets
-
-# 編譯伺服器
 make
 ```
 
 ## 服務啟動指南
-請開啟兩個終端機視窗：
+本系統基於 **Layer 2 Raw Sockets** 開發，因此必須在 Linux/WSL 環境下並使用 `sudo` 權限執行。測試時請開啟兩個終端機視窗：
 
 1. **啟動核心伺服器**:
+   需指定網卡介面名稱（本機測試請用 `lo`）：
    ```bash
-   ./server
+   sudo ./server lo
    ```
-   預設監聽 TCP 連接埠: `8080`
 
 2. **啟動 WebSocket 代理**:
+   請使用虛擬環境內的 Python 執行，並給予 sudo 權限：
    ```bash
-   python3 ws_proxy.py
+   sudo ./venv/bin/python3 ws_proxy.py
    ```
-   預設對外服務連接埠: `8081`
+   *(預設對外 WebSocket 服務連接埠: `8081`)*
 
-3. **連線測試**:
-   直接開啟瀏覽器並執行 `client.html`。
+3. **網頁連線測試**:
+   - 直接用瀏覽器開啟專案資料夾內的 `client.html`。
+   - 畫面上方若顯示「已連線」，即代表成功。
 
 ## 內建功能
 - **多人即時編輯**: 一端修改，多端秒級同步（Base64 增量同步）。
