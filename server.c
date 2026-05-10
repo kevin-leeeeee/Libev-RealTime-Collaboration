@@ -74,6 +74,22 @@ int base64_decode(const char *input, char *output) {
     return j;
 }
 
+int base64_encode(const unsigned char *input, int len, char *output) {
+    int i, j;
+    for (i = 0, j = 0; i < len; i += 3) {
+        int v = input[i] << 16;
+        if (i + 1 < len) v |= input[i + 1] << 8;
+        if (i + 2 < len) v |= input[i + 2];
+
+        output[j++] = base64_table[(v >> 18) & 0x3F];
+        output[j++] = base64_table[(v >> 12) & 0x3F];
+        output[j++] = (i + 1 < len) ? base64_table[(v >> 6) & 0x3F] : '=';
+        output[j++] = (i + 2 < len) ? base64_table[v & 0x3F] : '=';
+    }
+    output[j] = '\0';
+    return j;
+}
+
 // 儲存多個文件的狀態
 typedef struct {
     char name[64];
@@ -141,8 +157,46 @@ void save_file_to_disk(int index, const char *base64_content) {
     free(decoded);
 }
 
+void update_files_index() {
+    FILE *idx = fopen("files_index.txt", "w");
+    if (!idx) return;
+    for (int i = 0; i < file_count; i++) {
+        fprintf(idx, "%s\n", doc_files[i].name);
+    }
+    fclose(idx);
+}
+
 void init_files() {
-    // 初始化
+    FILE *idx = fopen("files_index.txt", "r");
+    if (!idx) return;
+    
+    char line[128];
+    while (fgets(line, sizeof(line), idx)) {
+        line[strcspn(line, "\r\n")] = 0;
+        if (strlen(line) == 0) continue;
+        if (file_count >= MAX_FILES) break;
+        
+        strncpy(doc_files[file_count].name, line, 63);
+        doc_files[file_count].content[0] = '\0';
+        
+        FILE *fp = fopen(line, "r");
+        if (fp) {
+            fseek(fp, 0, SEEK_END);
+            long fsize = ftell(fp);
+            fseek(fp, 0, SEEK_SET);
+            if (fsize > 0 && fsize < MAX_BUFFER / 2) {
+                unsigned char *buf = malloc(fsize + 1);
+                if (buf) {
+                    fread(buf, 1, fsize, fp);
+                    base64_encode(buf, fsize, doc_files[file_count].content);
+                    free(buf);
+                }
+            }
+            fclose(fp);
+        }
+        file_count++;
+    }
+    fclose(idx);
 }
 
 void send_to_client(client_t *client, const char *msg, int is_system, int is_game) {
@@ -259,7 +313,29 @@ void handle_command(client_t *client, char *cmd) {
         FILE *fp = fopen(filename, "w");
         if(fp) fclose(fp);
         
+        update_files_index();
         broadcast_file_list();
+        return;
+    }
+
+    if (strncmp(cmd, "/delete_file ", 13) == 0) {
+        char *filename = cmd + 13;
+        for (int i = 0; i < file_count; i++) {
+            if (strcmp(doc_files[i].name, filename) == 0) {
+                remove(filename);
+                for (int j = i; j < file_count - 1; j++) {
+                    doc_files[j] = doc_files[j + 1];
+                }
+                file_count--;
+                update_files_index();
+                broadcast_file_list();
+                
+                char del_msg[128];
+                snprintf(del_msg, sizeof(del_msg), "File '%s' has been deleted.", filename);
+                broadcast_message(NULL, del_msg, 1, 0, 0);
+                break;
+            }
+        }
         return;
     }
 

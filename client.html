@@ -226,10 +226,16 @@
                     }
                 });
                 fileContents = newContents;
-                if (!currentFile && files.length > 0) {
-                    currentFile = files[0];
+                
+                if (currentFile && !(currentFile in fileContents)) {
+                    currentFile = null;
+                    docEditor.value = '';
+                }
+                if (!currentFile && Object.keys(fileContents).length > 0) {
+                    currentFile = Object.keys(fileContents)[0];
                     docEditor.value = fileContents[currentFile] || '';
                 }
+                
                 renderFileTabs();
                 return;
             }
@@ -391,24 +397,40 @@
     function renderFileTabs() {
         fileTabs.innerHTML = '';
         Object.keys(fileContents).forEach(filename => {
+            const btnContainer = document.createElement('div');
+            btnContainer.className = 'flex items-center gap-1 group w-full';
+
             const btn = document.createElement('button');
             const isActive = filename === currentFile;
-            btn.className = `w-full text-left px-3 py-2 rounded-xl text-xs font-medium transition-all flex items-center gap-2 group ${
+            btn.className = `flex-grow text-left px-3 py-2 rounded-xl text-xs font-medium transition-all flex items-center gap-2 ${
                 isActive ? 'bg-cyan-500 text-white shadow-md' : 'text-slate-600 hover:bg-white/60'
             }`;
             
             const icon = filename.endsWith('.c') ? '📄' : filename.endsWith('.h') ? '📋' : '📝';
-            btn.innerHTML = `<span>${icon}</span> <span class="truncate">${filename}</span>`;
+            btn.innerHTML = `<span>${icon}</span> <span class="truncate max-w-[80px]" title="${filename}">${filename}</span>`;
             
             btn.onclick = () => {
                 if (currentFile === filename) return;
                 currentFile = filename;
                 docEditor.value = fileContents[filename];
                 renderFileTabs();
-                // 觸發一次同步讓遠端知道我切換了（可選）
                 syncDocument();
             };
-            fileTabs.appendChild(btn);
+
+            const delBtn = document.createElement('button');
+            delBtn.className = 'w-6 h-6 rounded-md text-slate-400 hover:bg-red-500 hover:text-white flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100 shrink-0';
+            delBtn.innerHTML = '<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path></svg>';
+            delBtn.title = '刪除檔案';
+            delBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (confirm(`確定要刪除檔案 "${filename}" 嗎？\n此動作將無法復原。`)) {
+                    ws.send(`/delete_file ${filename}`);
+                }
+            };
+
+            btnContainer.appendChild(btn);
+            btnContainer.appendChild(delBtn);
+            fileTabs.appendChild(btnContainer);
         });
     }
 
