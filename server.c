@@ -21,6 +21,8 @@
 #define MSG_JOIN 0
 #define MSG_DATA 1
 #define MSG_LEAVE 2
+#define MSG_PING 3
+#define MSG_PONG 4
 
 // ANSI Colors for Terminal
 #define COLOR_RESET "\033[0m"
@@ -37,6 +39,7 @@ typedef struct client_node {
     unsigned char mac[6];
     char nickname[NICKNAME_LEN];
     int has_joined;
+    int ping_missed;
     struct client_node *prev;
     struct client_node *next;
 } client_t;
@@ -44,6 +47,7 @@ typedef struct client_node {
 client_t *head = NULL;
 struct ev_loop *main_loop = NULL;
 ev_timer user_list_timer;
+ev_timer heartbeat_timer;
 
 
 int game_active = 0;
@@ -107,9 +111,28 @@ void broadcast_file_list();
 void broadcast_user_list();
 void broadcast_message(client_t *sender, const char *msg, int is_system, int is_game, int is_raw);
 void send_to_client(client_t *client, const char *msg, int is_system, int is_game);
+void send_eth_frame(const unsigned char *dest_mac, uint8_t msg_type, const char *payload, int payload_len);
+void remove_client(client_t *client);
 
 void user_list_timer_cb(struct ev_loop *loop, struct ev_timer *w, int revents) {
     broadcast_user_list();
+}
+
+void heartbeat_timer_cb(struct ev_loop *loop, struct ev_timer *w, int revents) {
+    client_t *curr = head;
+    client_t *tmp;
+    while (curr) {
+        tmp = curr->next;
+        curr->ping_missed++;
+        if (curr->ping_missed > 3) {
+            printf(COLOR_SYS "[TIMEOUT] Client '%s' (%02X:%02X) timed out (no pong).\n" COLOR_RESET,
+                   curr->nickname, curr->mac[4], curr->mac[5]);
+            remove_client(curr);
+        } else {
+            send_eth_frame(curr->mac, MSG_PING, "", 0);
+        }
+        curr = tmp;
+    }
 }
 
 void trigger_user_list_broadcast() {
@@ -455,7 +478,11 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
             client = (client_t *)malloc(sizeof(client_t));
             memcpy(client->mac, src_mac, 6);
             client->has_joined = 1;
-            snprintf(client->nickname, NICKNAME_LEN, "Guest_%02X%02X", src_mac[4], src_mac[5]);
+            client->ping_missed = 0;
+            const char *animals[] = {"Fox", "Cat", "Dog", "Bear", "Owl", "Lion", "Wolf", "Frog", "Duck", "Seal", "Kiwi", "Panda", "Deer", "Tiger", "Koala", "Swan"};
+            int num_animals = sizeof(animals) / sizeof(animals[0]);
+            int idx = (src_mac[4] + src_mac[5]) % num_animals;
+            snprintf(client->nickname, NICKNAME_LEN, "%s_%02X%02X", animals[idx], src_mac[4], src_mac[5]);
             
             client->prev = NULL;
             client->next = head;
@@ -481,6 +508,7 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
         } else {
             // 已存在的客戶端重新 JOIN (例如重新整理網頁)
             client->has_joined = 1;
+            client->ping_missed = 0;
             trigger_user_list_broadcast();
             
             // 補發文件列表給他
@@ -498,6 +526,12 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
     }
     
     if (!client) { free(buffer); return; } // 忽略未 JOIN 就發送資料的裝置
+    
+    if (msg_type == MSG_PONG) {
+        client->ping_missed = 0;
+        free(buffer);
+        return;
+    }
     
     if (msg_type == MSG_LEAVE) {
         remove_client(client);
@@ -600,6 +634,10 @@ int main(int argc, char *argv[]) {
     }
     
     ev_timer_init(&user_list_timer, user_list_timer_cb, 0., 0.);
+    
+    // Heartbeat check every 5.0 seconds
+    ev_timer_init(&heartbeat_timer, heartbeat_timer_cb, 5.0, 5.0);
+    ev_timer_start(loop, &heartbeat_timer);
     
     struct ev_io read_watcher;
     ev_io_init(&read_watcher, read_cb, raw_socket_fd, EV_READ);

@@ -16,6 +16,8 @@ CUSTOM_ETH_TYPE = 0x88B5
 MSG_JOIN = 0
 MSG_DATA = 1
 MSG_LEAVE = 2
+MSG_PING = 3
+MSG_PONG = 4
 
 WS_PORT = int(os.environ.get('PORT', 8081))
 BROADCAST_MAC = b'\xff\xff\xff\xff\xff\xff'
@@ -62,6 +64,15 @@ async def central_raw_recv():
                 continue
                 
             payload = data[17:17+payload_len]
+            
+            if msg_type == MSG_PING:
+                if dest_mac in connected_clients:
+                    try:
+                        pong_frame = pack_eth_frame(server_mac, dest_mac, MSG_PONG, b"")
+                        raw_socket.send(pong_frame)
+                    except Exception as e:
+                        log_msg(f"Failed to send PONG frame: {e}")
+                continue
             
             if msg_type == MSG_DATA:
                 decoded = payload.decode('utf-8', errors='replace').strip()
