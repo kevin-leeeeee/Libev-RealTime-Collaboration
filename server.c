@@ -42,6 +42,9 @@ typedef struct client_node {
 } client_t;
 
 client_t *head = NULL;
+struct ev_loop *main_loop = NULL;
+ev_timer user_list_timer;
+
 
 int game_active = 0;
 int game_target = 0;
@@ -104,6 +107,16 @@ void broadcast_file_list();
 void broadcast_user_list();
 void broadcast_message(client_t *sender, const char *msg, int is_system, int is_game, int is_raw);
 void send_to_client(client_t *client, const char *msg, int is_system, int is_game);
+
+void user_list_timer_cb(struct ev_loop *loop, struct ev_timer *w, int revents) {
+    broadcast_user_list();
+}
+
+void trigger_user_list_broadcast() {
+    ev_timer_stop(main_loop, &user_list_timer);
+    ev_timer_set(&user_list_timer, 0.2, 0.);
+    ev_timer_start(main_loop, &user_list_timer);
+}
 
 // 透過 Raw Socket 發送自訂 Ethernet Frame
 void send_eth_frame(const unsigned char *dest_mac, uint8_t msg_type, const char *payload, int payload_len) {
@@ -266,7 +279,7 @@ void remove_client(client_t *client) {
     snprintf(sys_msg, sizeof(sys_msg), "User '%s' left the chat.", client->nickname);
     printf("%s\n", sys_msg);
     broadcast_message(NULL, sys_msg, 1, 0, 0);
-    broadcast_user_list();
+    trigger_user_list_broadcast();
     
     free(client);
 }
@@ -348,7 +361,7 @@ void handle_command(client_t *client, char *cmd) {
             snprintf(client->nickname, NICKNAME_LEN, "%.31s", new_nick);
             snprintf(sys_msg, sizeof(sys_msg), "User '%s' is now known as '%s'", old_nick, client->nickname);
             broadcast_message(NULL, sys_msg, 1, 0, 0);
-            broadcast_user_list(); 
+            trigger_user_list_broadcast(); 
         }
     } else if (strcmp(cmd, "/list") == 0) {
         strcpy(sys_msg, "Online users: ");
@@ -464,11 +477,11 @@ void read_cb(struct ev_loop *loop, struct ev_io *watcher, int revents) {
             snprintf(sys_msg, sizeof(sys_msg), "User '%s' joined the chat.", client->nickname);
             printf("%s\n", sys_msg);
             broadcast_message(client, sys_msg, 1, 0, 0);
-            broadcast_user_list();
+            trigger_user_list_broadcast();
         } else {
             // 已存在的客戶端重新 JOIN (例如重新整理網頁)
             client->has_joined = 1;
-            broadcast_user_list();
+            trigger_user_list_broadcast();
             
             // 補發文件列表給他
             broadcast_file_list();
@@ -573,13 +586,20 @@ int main(int argc, char *argv[]) {
     int flags = fcntl(raw_socket_fd, F_GETFL);
     fcntl(raw_socket_fd, F_SETFL, flags | O_NONBLOCK);
     
+    // Increase receive buffer to 8MB to prevent drops during broadcast storms
+    int rcvbuf = 8 * 1024 * 1024;
+    setsockopt(raw_socket_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    
     srand(time(NULL));
     init_files();
     struct ev_loop *loop = ev_default_loop(0);
+    main_loop = loop;
     if (!loop) {
         perror("Failed to initialize libev loop");
         exit(EXIT_FAILURE);
     }
+    
+    ev_timer_init(&user_list_timer, user_list_timer_cb, 0., 0.);
     
     struct ev_io read_watcher;
     ev_io_init(&read_watcher, read_cb, raw_socket_fd, EV_READ);
